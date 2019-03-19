@@ -1,0 +1,289 @@
+diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
+--- a/devtools/server/actors/storage.js
++++ b/devtools/server/actors/storage.js
+@@ -12,6 +12,7 @@ const Services = require("Services");
+ const defer = require("devtools/shared/defer");
+ const {isWindowIncluded} = require("devtools/shared/layout/utils");
+ const specs = require("devtools/shared/specs/storage");
++const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
+ 
+ const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
+ const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
+@@ -1298,6 +1299,233 @@ StorageActors.createActor({
+   observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
+ }, getObjectForLocalOrSessionStorage("sessionStorage"));
+ 
++/**
++* The Extension Storage actor.
++*/
++StorageActors.createActor({
++  typeName: "extensionStorage",
++}, {
++  initialize(storageActor) {
++    protocol.Actor.prototype.initialize.call(this, null);
++
++    this.storageActor = storageActor;
++
++    this.populateStoresForHosts();
++
++    this.addExtensionStorageListeners();
++
++    this.onWindowReady = this.onWindowReady.bind(this);
++    this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
++    this.storageActor.on("window-ready", this.onWindowReady);
++    this.storageActor.on("window-destroyed", this.onWindowDestroyed);
++  },
++
++  destroy() {
++    this.removeExtensionStorageListeners();
++
++    this.storageActor.off("window-ready", this.onWindowReady);
++    this.storageActor.off("window-destroyed", this.onWindowDestroyed);
++
++    this.hostVsStores.clear();
++
++    protocol.Actor.prototype.destroy.call(this);
++
++    this.storageActor = null;
++  },
++
++  /**
++  * Ensures this.hostVsStores stays up-to-date and passes the change on
++  * to update the view.
++  */
++  onStorageChange(changes, areaName) {
++    if (areaName !== "local") {
++      return;
++    }
++
++    for (const key in changes) {
++      const storageChange = changes[key];
++      const {newValue, oldValue} = storageChange;
++
++      // TODO: Not sure what the best way is to get the current host.
++      let host = null;
++      for (const window of this.windows) {
++        host = this.getHostName(window.location);
++        if (host) {
++          break;
++        }
++      }
++
++      let action = null;
++      const storeMap = this.hostVsStores.get(host);
++
++      if (typeof newValue === "undefined") {
++        action = "deleted";
++        storeMap.delete(key);
++      } else if (typeof oldValue === "undefined") {
++        action = "added";
++        storeMap.set(key, newValue);
++      } else {
++        action = "changed";
++        storeMap.set(key, newValue);
++      }
++
++      this.storageActor.update(action, this.typeName, {[host]: [key]});
++    }
++  },
++
++  // TODO: Don't use WE APIs directly
++  addExtensionStorageListeners() {
++    this.onStorageChange = this.onStorageChange.bind(this);
++    for (const window of this.windows) {
++      Cu.waiveXrays(window).browser.storage.onChanged.addListener(this.onStorageChange);
++    }
++  },
++
++  // TODO: Don't use WE APIs directly
++  removeExtensionStorageListeners() {
++    for (const window of this.windows) {
++      Cu.waiveXrays(window).browser.storage.onChanged.removeListener(
++        this.onStorageChange
++      );
++    }
++  },
++
++  /**
++   * This method is overriden and left blank as for extensionStorage, this operation
++   * cannot be performed synchronously. Thus, the preListStores method exists to
++   * do the same task asynchronously.
++   */
++  populateStoresForHosts() {},
++
++  /**
++   * Purpose of this method is same as populateStoresForHosts but this is async.
++   * This exact same operation cannot be performed in populateStoresForHosts
++   * method, as that method is called in initialize method of the actor, which
++   * cannot be asynchronous.
++   */
++  async preListStores() {
++    this.hostVsStores = new Map();
++
++    for (const window of this.windows) {
++      const host = this.getHostName(window.location);
++      if (host) {
++        await this.populateStoresForHost(host, window);
++      }
++    }
++  },
++
++  /**
++  * This method asynchronously reads the browser.storage.local data for the window
++  * (if it's an extension page window and the related extension has the storage
++  * permission) and caches this data into this.hostVsStores.
++  */
++  async populateStoresForHost(host, window) {
++    if (this.hostVsStores.has(host)) {
++      return;
++    }
++
++    const storeMap = new Map();
++    const principal = this.getPrincipal(window);
++    const { addonId } = principal;
++    // TODO: Get extension object from the parent instead?
++    const extension = ExtensionProcessScript.getExtensionChild(addonId);
++
++    if (extension && extension.hasPermission("storage")) {
++      // TODO: Using the browser.storage.local API after unwaive the x-rays of the
++      // extension page window is a temporary hacky shortcut to be able to quickly
++      // put together the prototype, as the browser object could be overridden by
++      // the extension code.
++      const data = await Cu.waiveXrays(window).browser.storage.local.get();
++
++      for (const [key, value] of Object.entries(data)) {
++        storeMap.set(key, value);
++      }
++    }
++
++    this.hostVsStores.set(host, storeMap);
++  },
++
++  getValuesForHost(host, name) {
++    if (name) {
++      return [{name, value: this.hostVsStores.get(host).get(name)}];
++    }
++
++    const result = [];
++    for (const [key, value] of Array.from(this.hostVsStores.get(host).entries())) {
++      result.push({name: key, value});
++    }
++    return result;
++  },
++
++  /**
++   * This method converts the values returned by getValuesForHost into a StoreObject
++   * (currently based off of this same method for IndexedDB).
++   */
++  toStoreObject({name, value}) {
++    if (!{name, value}) {
++      return null;
++    }
++
++    // Stringify adds redundant quotes to strings
++    if (typeof value !== "string") {
++      // Not all possible values are stringifiable (e.g. functions)
++      value = JSON.stringify(value) || "Object";
++    }
++
++    // FIXME: Bug 1318029 - Due to a bug that is thrown whenever a
++    // LongStringActor string reaches DebuggerServer.LONG_STRING_LENGTH we need
++    // to trim the value. When the bug is fixed we should stop trimming the
++    // string here.
++    const maxLength = DebuggerServer.LONG_STRING_LENGTH - 1;
++    if (value.length > maxLength) {
++      value = value.substr(0, maxLength);
++    }
++
++    return {
++      name,
++      value: new LongStringActor(this.conn, value || ""),
++    };
++  },
++
++  getFields() {
++    return [
++      // name needs to be editable for the addItem case, where a temporary key-value
++      // pair is created that can later be edited via editItem.
++      { name: "name", editable: true },
++      { name: "value", editable: true },
++    ];
++  },
++
++  // TODO: Don't use WE APIs directly
++  async addItem(guid, host) {
++    const win = this.storageActor.getWindowFromHost(host);
++    await Cu.waiveXrays(win).browser.storage.local.set({[guid]: DEFAULT_VALUE});
++  },
++
++  // TODO: Don't use WE APIs directly
++  async editItem({host, field, items, oldValue}) {
++    const win = this.storageActor.getWindowFromHost(host);
++    const {name, value} = items;
++    // If the name changed, remove the previous entry in storage by the old name first
++    if (field === "name") {
++      await Cu.waiveXrays(win).browser.storage.local.remove(oldValue);
++    }
++    await Cu.waiveXrays(win).browser.storage.local.set({[name]: value});
++  },
++
++  // TODO: Don't use WE APIs directly
++  async removeItem(host, name) {
++    const win = this.storageActor.getWindowFromHost(host);
++    await Cu.waiveXrays(win).browser.storage.local.remove(name);
++  },
++
++  // TODO: Don't use WE APIs directly
++  async removeAll(host) {
++    const win = this.storageActor.getWindowFromHost(host);
++    await Cu.waiveXrays(win).browser.storage.local.clear();
++  },
++});
++
+ StorageActors.createActor({
+   typeName: "Cache",
+ }, {
+diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
+--- a/devtools/shared/specs/storage.js
++++ b/devtools/shared/specs/storage.js
+@@ -163,6 +163,40 @@ createStorageSpec({
+   methods: storageMethods,
+ });
+ 
++// TODO: create a new storeObjectType, since extension storage is less
++// restrictive than localStorage/sessionStorage and more restrictive than
++// IndexedDB.
++// Extension store object
++types.addDictType("extensionobject", {
++  name: "nullable:string",
++  value: "nullable:longstring",
++});
++
++// Array of Extension Storage store objects
++types.addDictType("extensionstoreobject", {
++  total: "number",
++  offset: "number",
++  data: "array:nullable:extensionobject",
++});
++
++createStorageSpec({
++  typeName: "extensionStorage",
++  storeObjectType: "extensionstoreobject",
++  methods: {
++    // TODO: May want to define storageMethods differently compared to
++    // localStorage and sessionStorage...
++    ...storageMethods,
++    addExtensionStorageListeners: {
++      request: {},
++      response: {},
++    },
++    removeExtensionStorageListeners: {
++      request: {},
++      response: {},
++    },
++  },
++});
++
+ types.addDictType("cacheobject", {
+   "url": "string",
+   "status": "string",
