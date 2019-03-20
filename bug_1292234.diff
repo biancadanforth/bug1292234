@@ -1,15 +1,24 @@
+# HG changeset patch
+# User Bianca Danforth <bdanforth@mozilla.com>
+# Date 1553039428 25200
+#      Tue Mar 19 16:50:28 2019 -0700
+# Node ID fc3c4f4be722a1471921f36d1a861fbc9ab57ad6
+# Parent  25398e555020fef80c7b2a06a0d4c667e861cd6f
+Bug 1292234 - Prototype extension storage in addon developer toolbox
+
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,6 +12,7 @@ const Services = require("Services");
+@@ -12,6 +12,8 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
 +const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
++const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
-@@ -1298,6 +1299,233 @@ StorageActors.createActor({
+@@ -1298,6 +1300,250 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -128,6 +137,16 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    }
 +  },
 +
++  async populateStoreMap(storagePrincipal, storeMap) {
++    const db = await ExtensionStorageIDB.open(storagePrincipal);
++    const data = await db.get();
++
++    for (const [key, value] of Object.entries(data)) {
++      storeMap.set(key, value);
++    }
++    return storeMap;
++  },
++
 +  /**
 +  * This method asynchronously reads the browser.storage.local data for the window
 +  * (if it's an extension page window and the related extension has the storage
@@ -137,7 +156,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    if (this.hostVsStores.has(host)) {
 +      return;
 +    }
-+
 +    const storeMap = new Map();
 +    const principal = this.getPrincipal(window);
 +    const { addonId } = principal;
@@ -145,14 +163,22 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    const extension = ExtensionProcessScript.getExtensionChild(addonId);
 +
 +    if (extension && extension.hasPermission("storage")) {
-+      // TODO: Using the browser.storage.local API after unwaive the x-rays of the
-+      // extension page window is a temporary hacky shortcut to be able to quickly
-+      // put together the prototype, as the browser object could be overridden by
-+      // the extension code.
-+      const data = await Cu.waiveXrays(window).browser.storage.local.get();
++      // TODO: Cover the case when the extension was just installed, has not yet
++      // migrated to the storage IDB backend (this is done lazily) here:
++      // https://searchfox.org/mozilla-central/source/toolkit/components/extensions/Extension.jsm#1940-1948
++      // Therefore `extension.getSharedData("storageIDBBackend")` is `null`.
++      // Temporary workaround is simply to reload the extension before opening the
++      // storage inspector.
++      if (extension.getSharedData("storageIDBBackend")) {
++        // This extension is using the storageIDBBackend
++        const storagePrincipal = extension.getSharedData("storageIDBPrincipal");
 +
-+      for (const [key, value] of Object.entries(data)) {
-+        storeMap.set(key, value);
++        const db = await ExtensionStorageIDB.open(storagePrincipal);
++        const data = await db.get();
++
++        for (const [key, value] of Object.entries(data)) {
++          storeMap.set(key, value);
++        }
 +      }
 +    }
 +
