@@ -2,14 +2,14 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID 9f0d9d7718e1036d6f4844af99d790f3b1c0810a
+# Node ID c19c8d95c45194be5c47d79ad5e2d830f411a49c
 # Parent  25398e555020fef80c7b2a06a0d4c667e861cd6f
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,6 +12,8 @@ const Services = require("Services");
+@@ -12,12 +12,16 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
@@ -18,7 +18,15 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
-@@ -1298,6 +1300,263 @@ StorageActors.createActor({
+ 
+ const DEFAULT_VALUE = "value";
+ 
++const DEVTOOLS_EXT_STORAGELOCAL_CHANGED = "Extension:DevTools:OnStorageLocalChanged";
++
+ loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
+   "devtools/client/shared/natural-sort", true);
+ 
+@@ -1298,6 +1302,273 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -33,9 +41,15 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +    this.storageActor = storageActor;
 +
-+    this.populateStoresForHosts();
++    // Map<host, ExtensionStorageIDB db connection>
++    this.dbConnectionForHost = new Map();
 +
-+    this.addExtensionStorageListeners();
++    this.onStorageChange = this.onStorageChange.bind(this);
++
++    this.conn.parentMessageManager.addMessageListener(
++      DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
++
++    this.populateStoresForHosts();
 +
 +    this.onWindowReady = this.onWindowReady.bind(this);
 +    this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
@@ -44,7 +58,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  },
 +
 +  destroy() {
-+    this.removeExtensionStorageListeners();
++    this.conn.parentMessageManager.removeMessageListener(
++      DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
 +
 +    this.storageActor.off("window-ready", this.onWindowReady);
 +    this.storageActor.off("window-destroyed", this.onWindowDestroyed);
@@ -57,11 +72,15 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  },
 +
 +  /**
-+  * Ensures this.hostVsStores stays up-to-date and passes the change on
-+  * to update the view.
++  * This fires when the extension changes storage data while the storage
++  * inspector is open. Ensures this.hostVsStores stays up-to-date and
++  * passes the change on to update the view.
 +  */
-+  onStorageChange(changes, areaName) {
-+    if (areaName !== "local") {
++  onStorageChange({name, data}) {
++    const host = `moz-extension://${data.extensionUUID}`;
++    const changes = data.changes;
++    const storeMap = this.hostVsStores.get(host);
++    if (!storeMap) {
 +      return;
 +    }
 +
@@ -69,18 +88,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      const storageChange = changes[key];
 +      const {newValue, oldValue} = storageChange;
 +
-+      // TODO: Not sure what the best way is to get the current host.
-+      let host = null;
-+      for (const window of this.windows) {
-+        host = this.getHostName(window.location);
-+        if (host) {
-+          break;
-+        }
-+      }
-+
-+      let action = null;
-+      const storeMap = this.hostVsStores.get(host);
-+
++      let action;
 +      if (typeof newValue === "undefined") {
 +        action = "deleted";
 +        storeMap.delete(key);
@@ -93,23 +101,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      }
 +
 +      this.storageActor.update(action, this.typeName, {[host]: [key]});
-+    }
-+  },
-+
-+  // TODO: Don't use WE APIs directly
-+  addExtensionStorageListeners() {
-+    this.onStorageChange = this.onStorageChange.bind(this);
-+    for (const window of this.windows) {
-+      Cu.waiveXrays(window).browser.storage.onChanged.addListener(this.onStorageChange);
-+    }
-+  },
-+
-+  // TODO: Don't use WE APIs directly
-+  removeExtensionStorageListeners() {
-+    for (const window of this.windows) {
-+      Cu.waiveXrays(window).browser.storage.onChanged.removeListener(
-+        this.onStorageChange
-+      );
 +    }
 +  },
 +
@@ -137,8 +128,9 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    }
 +  },
 +
-+  async populateStoreMap(storagePrincipal, storeMap) {
++  async populateStoreMap(host, storagePrincipal, storeMap) {
 +    const db = await ExtensionStorageIDB.open(storagePrincipal);
++    this.dbConnectionForHost.set(host, db);
 +    const data = await db.get();
 +
 +    for (const [key, value] of Object.entries(data)) {
@@ -185,13 +177,13 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +          } = await ExtensionStorageIDB.selectBackend(context);
 +
 +          if (backendEnabled) {
-+            storeMap = await this.populateStoreMap(storagePrincipal, storeMap);
++            storeMap = await this.populateStoreMap(host, storagePrincipal, storeMap);
 +          }
 +        }
 +      } else if (isUsingIDBBackend) {
 +        const storagePrincipal = extension.getSharedData("storageIDBPrincipal");
 +
-+        storeMap = await this.populateStoreMap(storagePrincipal, storeMap);
++        storeMap = await this.populateStoreMap(host, storagePrincipal, storeMap);
 +      }
 +    }
 +
@@ -249,33 +241,59 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    ];
 +  },
 +
-+  // TODO: Don't use WE APIs directly
 +  async addItem(guid, host) {
-+    const win = this.storageActor.getWindowFromHost(host);
-+    await Cu.waiveXrays(win).browser.storage.local.set({[guid]: DEFAULT_VALUE});
++    const db = this.dbConnectionForHost.get(host);
++    if (!db) {
++      return;
++    }
++    const changes = await db.set({[guid]: DEFAULT_VALUE});
++    this.fireOnChangedExtensionEvent(host, changes);
 +  },
 +
-+  // TODO: Don't use WE APIs directly
 +  async editItem({host, field, items, oldValue}) {
-+    const win = this.storageActor.getWindowFromHost(host);
++    const db = this.dbConnectionForHost.get(host);
++    if (!db) {
++      return;
++    }
++
 +    const {name, value} = items;
 +    // If the name changed, remove the previous entry in storage by the old name first
 +    if (field === "name") {
-+      await Cu.waiveXrays(win).browser.storage.local.remove(oldValue);
++      const changes = await db.remove(oldValue);
++      this.fireOnChangedExtensionEvent(host, changes);
 +    }
-+    await Cu.waiveXrays(win).browser.storage.local.set({[name]: value});
++    const changes = await db.set({[name]: value});
++    this.fireOnChangedExtensionEvent(host, changes);
 +  },
 +
-+  // TODO: Don't use WE APIs directly
 +  async removeItem(host, name) {
-+    const win = this.storageActor.getWindowFromHost(host);
-+    await Cu.waiveXrays(win).browser.storage.local.remove(name);
++    const db = this.dbConnectionForHost.get(host);
++    if (!db) {
++      return;
++    }
++
++    const changes = await db.remove(name);
++    this.fireOnChangedExtensionEvent(host, changes);
 +  },
 +
-+  // TODO: Don't use WE APIs directly
 +  async removeAll(host) {
-+    const win = this.storageActor.getWindowFromHost(host);
-+    await Cu.waiveXrays(win).browser.storage.local.clear();
++    const db = this.dbConnectionForHost.get(host);
++    if (!db) {
++      return;
++    }
++
++    const changes = await db.clear();
++    this.fireOnChangedExtensionEvent(host, changes);
++  },
++
++  /**
++  * Let the extension know that storage data has been changed by the user from
++  * the storage inspector.
++  */
++  fireOnChangedExtensionEvent(host, changes) {
++    const uuid = (new URL(host)).host;
++    Services.cpmm.sendAsyncMessage(`Extension:StorageLocalOnChanged:${uuid}`,
++                                   changes);
 +  },
 +});
 +
@@ -326,3 +344,53 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
  types.addDictType("cacheobject", {
    "url": "string",
    "status": "string",
+diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
+--- a/toolkit/components/extensions/parent/ext-storage.js
++++ b/toolkit/components/extensions/parent/ext-storage.js
+@@ -1,5 +1,7 @@
+ "use strict";
+ 
++/* global ExtensionParent */
++
+ XPCOMUtils.defineLazyModuleGetters(this, {
+   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
+   ExtensionStorage: "resource://gre/modules/ExtensionStorage.jsm",
+@@ -37,6 +39,21 @@ const lookupManagedStorage = async (exte
+   return null;
+ };
+ 
++// Notify storage actor when storage data has changed if the extension is targeted
++// by a developer toolbox.
++function notifyDevToolsListeners(extension, changes) {
++  const {DebugUtils} = ExtensionParent;
++  let debugBrowserPromise = DebugUtils.debugBrowserPromises.get(extension.id);
++  if (debugBrowserPromise) {
++    (async () => {
++      const browser = await debugBrowserPromise;
++      browser.messageManager.sendAsyncMessage(
++        `Extension:DevTools:OnStorageLocalChanged`,
++        {changes, extensionUUID: extension.uuid});
++    })();
++  }
++}
++
+ this.storage = class extends ExtensionAPI {
+   constructor(extension) {
+     super(extension);
+@@ -63,6 +80,8 @@ this.storage = class extends ExtensionAP
+     }
+ 
+     ExtensionStorageIDB.notifyListeners(this.extension.id, data);
++
++    notifyDevToolsListeners(this.extension, data);
+   }
+ 
+   getAPI(context) {
+@@ -82,6 +101,7 @@ this.storage = class extends ExtensionAP
+             const changes = await db[method](...args);
+             if (changes) {
+               ExtensionStorageIDB.notifyListeners(extension.id, changes);
++              notifyDevToolsListeners(extension, changes);
+             }
+             return changes;
+           },
