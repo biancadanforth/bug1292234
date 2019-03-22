@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID c19c8d95c45194be5c47d79ad5e2d830f411a49c
+# Node ID edfd1d90740f3d699cb022b76de2200f8f822d6b
 # Parent  25398e555020fef80c7b2a06a0d4c667e861cd6f
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
@@ -26,7 +26,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1302,273 @@ StorageActors.createActor({
+@@ -1298,6 +1302,279 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -128,15 +128,32 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    }
 +  },
 +
-+  async populateStoreMap(host, storagePrincipal, storeMap) {
-+    const db = await ExtensionStorageIDB.open(storagePrincipal);
-+    this.dbConnectionForHost.set(host, db);
-+    const data = await db.get();
-+
-+    for (const [key, value] of Object.entries(data)) {
-+      storeMap.set(key, value);
++  async getStoragePrincipal(extension) {
++    if (extension.getSharedData("storageIDBBackend")) {
++      return extension.getSharedData("storageIDBPrincipal");
 +    }
-+    return storeMap;
++    // This extension either isn't using the IDB backend (false) or
++    // it hasn't migrated to the IDB backend yet (null)
++
++    // Loop for web extension context related to the current window
++    let currentContext;
++    for (const view of extension.views) {
++      currentContext = view;
++    }
++    if (!currentContext) {
++      // We didn't find the extension context for the current target; give up.
++      return null;
++    }
++    const {
++      backendEnabled,
++      storagePrincipal,
++    } = await ExtensionStorageIDB.selectBackend(currentContext);
++
++    if (!backendEnabled) {
++      // IDB backend disabled; give up.
++      return null;
++    }
++    return storagePrincipal;
 +  },
 +
 +  /**
@@ -144,58 +161,47 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  * (if it's an extension page window and the related extension has the storage
 +  * permission) and caches this data into this.hostVsStores.
 +  */
-+  async populateStoresForHost(host, window) {
++  async populateStoresForHost(host, window = this.storageActor.window) {
 +    if (this.hostVsStores.has(host)) {
 +      return;
 +    }
 +
-+    let storeMap = new Map();
 +    const principal = this.getPrincipal(window);
-+    const { addonId } = principal;
-+    // TODO: Get extension object from the parent instead?
-+    const extension = ExtensionProcessScript.getExtensionChild(addonId);
++    const extension = ExtensionProcessScript.getExtensionChild(principal.addonId);
 +
-+    if (extension && extension.hasPermission("storage")) {
-+      const isUsingIDBBackend = extension.getSharedData("storageIDBBackend");
-+      if (isUsingIDBBackend === null) {
-+        // Extension has not yet migrated to the IDB backend; trigger migration
++    if (!extension || !(extension.hasPermission("storage"))) {
++      return;
++    }
 +
-+        // TODO: Create own context object rather than getting from the view?
-+        let context;
-+        const {views} = extension;
-+        for (const view of views) {
-+          context = view.childManager.context;
-+          if (context) {
-+            break;
-+          }
-+        }
++    const storagePrincipal = await this.getStoragePrincipal(extension);
 +
-+        if (context) {
-+          const {
-+            backendEnabled,
-+            storagePrincipal,
-+          } = await ExtensionStorageIDB.selectBackend(context);
++    if (!storagePrincipal) {
++      return;
++    }
 +
-+          if (backendEnabled) {
-+            storeMap = await this.populateStoreMap(host, storagePrincipal, storeMap);
-+          }
-+        }
-+      } else if (isUsingIDBBackend) {
-+        const storagePrincipal = extension.getSharedData("storageIDBPrincipal");
++    const db = await ExtensionStorageIDB.open(storagePrincipal);
++    this.dbConnectionForHost.set(host, db);
++    const data = await db.get();
 +
-+        storeMap = await this.populateStoreMap(host, storagePrincipal, storeMap);
-+      }
++    const storeMap = new Map();
++    for (const [key, value] of Object.entries(data)) {
++      storeMap.set(key, value);
 +    }
 +
 +    this.hostVsStores.set(host, storeMap);
 +  },
 +
 +  getValuesForHost(host, name) {
++    const result = [];
++
++    if (!this.hostVsStores.has(host)) {
++      return result;
++    }
++
 +    if (name) {
 +      return [{name, value: this.hostVsStores.get(host).get(name)}];
 +    }
 +
-+    const result = [];
 +    for (const [key, value] of Array.from(this.hostVsStores.get(host).entries())) {
 +      result.push({name: key, value});
 +    }
