@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID edfd1d90740f3d699cb022b76de2200f8f822d6b
-# Parent  25398e555020fef80c7b2a06a0d4c667e861cd6f
+# Node ID 370db50852f3ab80acb6eaf2b6aeb83a790e1da7
+# Parent  3d5cd10cb1b20c1f83a189fbeb2e22f470bac0ec
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
@@ -306,6 +306,111 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
+diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
+--- a/devtools/server/tests/browser/browser.ini
++++ b/devtools/server/tests/browser/browser.ini
+@@ -122,6 +122,7 @@ skip-if = e10s # Bug 1183605 - devtools/
+ [browser_storage_listings.js]
+ [browser_storage_updates.js]
+ skip-if = (verify && debug && (os == 'mac' || os == 'linux'))
++[browser_storage_webext_storage_local.js]
+ [browser_stylesheets_getTextEmpty.js]
+ [browser_stylesheets_nested-iframes.js]
+ [browser_register_actor.js]
+diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.js b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
+@@ -0,0 +1,89 @@
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++/* import-globals-from storage-helpers.js */
++
++"use strict";
++
++Services.scriptloader.loadSubScript(
++  "chrome://mochitests/content/browser/devtools/server/tests/browser/storage-helpers.js",
++  this);
++
++const {Toolbox} = require("devtools/client/framework/toolbox");
++
++async function setupExtensionDebuggingToolbox(extensionId, {openToolbox} = {}) {
++  DebuggerServer.init();
++  DebuggerServer.registerAllActors();
++  const transport = DebuggerServer.connectPipe();
++  const client = new DebuggerClient(transport);
++  await client.connect();
++  const front = await client.mainRoot.getAddon({id: extensionId});
++  const target = await front.connect();
++
++  const result = {target, front};
++
++  if (openToolbox) {
++    result.toolbox = await gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW);
++  }
++
++  return result;
++}
++
++add_task(async function() {
++  async function background() {
++    /* globals browser */
++    browser.test.onMessage.addListener(async (msg, ...args) => {
++      switch (msg) {
++        case "storage-local-set":
++          await browser.storage.local.set(args[0]);
++          break;
++        default:
++          browser.test.fail(`Unexpected test message: ${msg}`);
++      }
++
++      browser.test.sendMessage(`${msg}:done`);
++    });
++
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++  const extension = ExtensionTestUtils.loadExtension({
++    background,
++    manifest: {
++      permissions: ["storage"],
++    },
++    useAddonManager: "temporary",
++  });
++
++  await extension.startup();
++
++  const expectedHost = await extension.awaitMessage("extension-origin");
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++
++  const storageFront = await target.getFront("storage");
++  const stores = await storageFront.listStores();
++  ok("extensionStorage" in stores, "Should have an extensionStorage store");
++  ok(expectedHost in stores.extensionStorage.hosts,
++     "Should have the expected extension host in the extensionStorage store");
++
++  let data = await stores.extensionStorage.getStoreObjects(expectedHost);
++  Assert.deepEqual(data, {
++    offset: 0, total: 0, data: [],
++    from: stores.extensionStorage.actorID,
++  }, "Got the expected results on empty storage.local");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = await stores.extensionStorage.getStoreObjects(expectedHost);
++  Assert.deepEqual(data, {
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    offset: 0, total: 1, data: [{name: "a", value: {str: "123"}}],
++    from: stores.extensionStorage.actorID,
++  }, "Got the expected results on populated storage.local");
++
++  await target.destroy();
++  await extension.unload();
++});
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
