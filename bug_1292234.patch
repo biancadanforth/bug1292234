@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID 370db50852f3ab80acb6eaf2b6aeb83a790e1da7
+# Node ID b7520451f3e62c56376824783d29516c8674a20e
 # Parent  3d5cd10cb1b20c1f83a189fbeb2e22f470bac0ec
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
@@ -321,42 +321,138 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,175 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
-+   http://creativecommons.org/publicdomain/zero/1.0/ */
++http://creativecommons.org/publicdomain/zero/1.0/ */
 +
-+/* import-globals-from storage-helpers.js */
++/* globals browser */
 +
 +"use strict";
 +
-+Services.scriptloader.loadSubScript(
-+  "chrome://mochitests/content/browser/devtools/server/tests/browser/storage-helpers.js",
-+  this);
++/**
++* This test verifies that web extension local storage (i.e. `browser.storage.local`)
++* data is correctly synced between the `about:debugging` toolbox's Storage panel and a
++* test extension.
++*/
 +
 +const {Toolbox} = require("devtools/client/framework/toolbox");
 +
-+async function setupExtensionDebuggingToolbox(extensionId, {openToolbox} = {}) {
-+  DebuggerServer.init();
-+  DebuggerServer.registerAllActors();
++/**
++* Starts up and connects the Debugger server to the DevTools client (both in the main
++* process) by listening over an nsIPipe, so that they can send remote debugging
++* protocol messages to each other.
++* @return {Promise} Resolves with a client object when the debugger has started up.
++*/
++async function startDebugger() {
++  initDebuggerServer();
 +  const transport = DebuggerServer.connectPipe();
 +  const client = new DebuggerClient(transport);
 +  await client.connect();
-+  const front = await client.mainRoot.getAddon({id: extensionId});
-+  const target = await front.connect();
-+
-+  const result = {target, front};
-+
-+  if (openToolbox) {
-+    result.toolbox = await gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW);
-+  }
-+
-+  return result;
++  return client;
 +}
 +
-+add_task(async function() {
-+  async function background() {
-+    /* globals browser */
++/**
++* Set up and optionally open the `about:debugging` toolbox for a given extension.
++* @param {String} extensionId - The id for the extension to be targeted by the toolbox.
++* @param {Object} options - Configuration options with various optional fields:
++*   - {Boolean} openToolbox - If true, open the toolbox
++* @return {Promise} Resolves with a web extension actor front and target objects and a
++* toolbox object when the toolbox has been setup
++*/
++async function setupExtensionDebuggingToolbox(extensionId, options = {}) {
++  const {openToolbox = false} = options;
++
++  const client = await startDebugger();
++  const front = await client.mainRoot.getAddon({id: extensionId});
++  // This is the web extension actor the toolbox will target
++  const target = await front.connect();
++
++  const toolbox = openToolbox ?
++    await gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW) : null;
++
++  return {front, target, toolbox};
++}
++
++/**
++* Builds the extension configuration object passed into ExtensionTestUtils.loadExtension
++* @param {Function} backgroundScript - (optional) a function comprising the test
++* extension's background script if provided
++* @return {Object} - The extension configuration object
++*/
++function getExtensionConfig(backgroundScript) {
++  const baseConfig = {
++    manifest: {
++      permissions: ["storage"],
++    },
++    useAddonManager: "temporary",
++  };
++  if (!backgroundScript) {
++    return baseConfig;
++  }
++  return {
++    background: `(${backgroundScript})()`,
++    ...baseConfig,
++  };
++}
++
++/**
++* Gets the extensionStorage store object from the storage actor in the extension process
++* for the target extension
++* @param {Object} target
++* @return {Promise} Resolves with an extensionStorage store object else null when all
++* stores have been obtained
++*/
++async function getExtensionStorage(target) {
++  const storageFront = await target.getFront("storage");
++  const stores = await storageFront.listStores();
++  return (stores.extensionStorage || null);
++}
++
++/**
++* Shutdown procedure common to all tasks.
++* @param {Object} extension
++* @param {Object} target
++*/
++async function shutdown(extension, target) {
++  await target.destroy();
++  await extension.unload();
++}
++
++add_task(async function test_extension_store_exists() {
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
++
++  await extension.startup();
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  const extensionStorage = await getExtensionStorage(target);
++  ok(extensionStorage, "Should have an extensionStorage store");
++
++  await shutdown(extension, target);
++});
++
++add_task(async function test_extension_origin_matches_debugger_target() {
++  async function backgroundScript() {
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++
++  const extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig(backgroundScript)
++  );
++
++  await extension.startup();
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  const {hosts} = await getExtensionStorage(target);
++  const expectedHost = await extension.awaitMessage("extension-origin");
++  ok(expectedHost in hosts,
++     "Should have the expected extension host in the extensionStorage store");
++
++  await shutdown(extension, target);
++});
++
++add_task(async function test_local_storage_update() {
++  async function backgroundScript() {
 +    browser.test.onMessage.addListener(async (msg, ...args) => {
 +      switch (msg) {
 +        case "storage-local-set":
@@ -371,45 +467,35 @@ new file mode 100644
 +
 +    browser.test.sendMessage("extension-origin", window.location.origin);
 +  }
-+  const extension = ExtensionTestUtils.loadExtension({
-+    background,
-+    manifest: {
-+      permissions: ["storage"],
-+    },
-+    useAddonManager: "temporary",
-+  });
++
++  const extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig(backgroundScript)
++  );
 +
 +  await extension.startup();
 +
-+  const expectedHost = await extension.awaitMessage("extension-origin");
++  const host = await extension.awaitMessage("extension-origin");
 +
 +  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
++  const extensionStorage = await getExtensionStorage(target);
 +
-+  const storageFront = await target.getFront("storage");
-+  const stores = await storageFront.listStores();
-+  ok("extensionStorage" in stores, "Should have an extensionStorage store");
-+  ok(expectedHost in stores.extensionStorage.hosts,
-+     "Should have the expected extension host in the extensionStorage store");
-+
-+  let data = await stores.extensionStorage.getStoreObjects(expectedHost);
-+  Assert.deepEqual(data, {
-+    offset: 0, total: 0, data: [],
-+    from: stores.extensionStorage.actorID,
-+  }, "Got the expected results on empty storage.local");
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
 +
 +  extension.sendMessage("storage-local-set", {a: 123});
 +  await extension.awaitMessage("storage-local-set:done");
 +
-+  data = await stores.extensionStorage.getStoreObjects(expectedHost);
-+  Assert.deepEqual(data, {
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
 +    // TODO: value is likely a string because of the storage object spec,
 +    // but it should actually reflect the actual stored type.
-+    offset: 0, total: 1, data: [{name: "a", value: {str: "123"}}],
-+    from: stores.extensionStorage.actorID,
-+  }, "Got the expected results on populated storage.local");
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
 +
-+  await target.destroy();
-+  await extension.unload();
++  await shutdown(extension, target);
 +});
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
