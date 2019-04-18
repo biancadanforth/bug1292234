@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID 559d8fa5ca84a0caf6fbde74934972308b9c64b2
+# Node ID 3daea867b3a04f8a6bc127066bb63d6e490f25cb
 # Parent  16d953cca41483b114d70a3132fbcfe60755708f
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
@@ -321,7 +321,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,262 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -365,8 +365,8 @@ new file mode 100644
 +
 +  const client = await startDebugger();
 +  const front = await client.mainRoot.getAddon({id: extensionId});
-+  // This is the web extension actor the toolbox will target
-+  const target = await front.connect();
++  // Starts a DevTools server in the extension child process.
++  const target = await front.connect(); // JSON representation of the actor
 +
 +  const toolbox = openToolbox ?
 +    await gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW) : null;
@@ -376,22 +376,37 @@ new file mode 100644
 +
 +/**
 +* Builds the extension configuration object passed into ExtensionTestUtils.loadExtension
-+* @param {Function} backgroundScript - (optional) a function comprising the test
-+* extension's background script if provided
++* @param {Object} - Options, if any, to add to the configuration
++* @param {Function} options.background - A function comprising the test extension's
++* background script if provided
++* @param {Object} options.files - An object whose keys correspond to file names and
++* values map to the file contents
 +* @return {Object} - The extension configuration object
 +*/
-+function getExtensionConfig(backgroundScript) {
++function getExtensionConfig({background, files} = {}) {
 +  const baseConfig = {
 +    manifest: {
 +      permissions: ["storage"],
 +    },
 +    useAddonManager: "temporary",
 +  };
-+  if (!backgroundScript) {
++  // TODO: This is ugly and hard to follow; consider a switch statement or other approach
++  if (!background && !files) {
 +    return baseConfig;
++  } else if (files) {
++    return {
++      files,
++      ...baseConfig,
++    };
++  } else if (background) {
++    return {
++      background,
++      ...baseConfig,
++    };
 +  }
 +  return {
-+    background: `(${backgroundScript})()`,
++    background,
++    files,
 +    ...baseConfig,
 +  };
 +}
@@ -411,8 +426,8 @@ new file mode 100644
 +
 +/**
 +* Shutdown procedure common to all tasks.
-+* @param {Object} extension
-+* @param {Object} target
++* @param {Object} extension - The test extension
++* @param {Object} target - The web extension actor targeted by the DevTools client
 +*/
 +async function shutdown(extension, target) {
 +  await target.destroy();
@@ -432,12 +447,12 @@ new file mode 100644
 +});
 +
 +add_task(async function test_extension_origin_matches_debugger_target() {
-+  async function backgroundScript() {
++  async function background() {
 +    browser.test.sendMessage("extension-origin", window.location.origin);
 +  }
 +
 +  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig(backgroundScript)
++    getExtensionConfig({background})
 +  );
 +
 +  await extension.startup();
@@ -452,7 +467,7 @@ new file mode 100644
 +});
 +
 +add_task(async function test_local_storage_update() {
-+  async function backgroundScript() {
++  async function background() {
 +    browser.test.onMessage.addListener(async (msg, ...args) => {
 +      switch (msg) {
 +        case "storage-local-set":
@@ -469,7 +484,7 @@ new file mode 100644
 +  }
 +
 +  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig(backgroundScript)
++    getExtensionConfig({background})
 +  );
 +
 +  await extension.startup();
@@ -487,6 +502,78 @@ new file mode 100644
 +  await extension.awaitMessage("storage-local-set:done");
 +
 +  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Storage updates should work correctly if an extension has no background script, but
++* adds storage items via some other transient script, like from an extension page in a tab
++*
++* Test case: Load extension with no background page. Open an extension page in a tab that
++* adds local storage items. With the extension page still open, open the add-on inspector.
++* The data in the inspector should match the items added by the extension.
++*/
++add_task(async function test_local_storage_no_background_script_ext_page_open() {
++  async function extension_page_in_tab() {
++    // TODO: This message listener code is virtually identical to that in the task above
++    // for my background script. Make DRYer
++    browser.test.onMessage.addListener(async (msg, ...args) => {
++      switch (msg) {
++        case "storage-local-set":
++          await browser.storage.local.set(args[0]);
++          break;
++        default:
++          browser.test.fail(`Unexpected test message: ${msg}`);
++      }
++      browser.test.sendMessage(`${msg}:done`);
++    });
++    window.onload = () => {
++      browser.test.sendMessage("extension-origin", window.location.origin);
++    };
++  }
++
++  const files = {
++    "extension_page_in_tab.html": `<!DOCTYPE html>
++      <html>
++        <head>
++          <meta charset="utf-8">
++        </head>
++        <body>
++          <h1>Extension Page in a Tab</h1>
++          <script src="extension_page_in_tab.js"></script>
++        </body>
++      </html>`,
++    "extension_page_in_tab.js": extension_page_in_tab,
++  };
++
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({files}));
++
++  await extension.startup();
++
++  const url = `moz-extension://${extension.uuid}/extension_page_in_tab.html`;
++  BrowserTestUtils.addTab(gBrowser, url);
++
++  // TODO add info("statement about milestones in each test") in places as helpful
++  // e.g. https://searchfox.org/mozilla-central/source/browser/components/extensions/test/browser/browser_ext_browserAction_popup.js#139
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  info("Waiting for addon toolbox storage inspector to open");
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  const extensionStorage = await getExtensionStorage(target);
++
++  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
++  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
 +    // TODO: value is likely a string because of the storage object spec,
