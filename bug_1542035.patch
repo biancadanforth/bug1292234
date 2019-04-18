@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID 24784c1ba086b365682ed720131a78bb71765d00
+# Node ID e2cabbabf32e45e92eb923cbccacaf44072d7590
 # Parent  16d953cca41483b114d70a3132fbcfe60755708f
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
@@ -26,7 +26,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1302,428 @@ StorageActors.createActor({
+@@ -1298,6 +1302,409 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -309,29 +309,10 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  },
 +
 +  async getStoragePrincipal(extension) {
-+    if (extension.getSharedData("storageIDBBackend")) {
-+      return extension.getSharedData("storageIDBPrincipal");
-+    }
-+    // This extension either isn't using the IDB backend (false) or
-+    // it hasn't migrated to the IDB backend yet (null)
-+    let result;
-+
-+    // Loop for web extension context related to the current window
-+    let currentContext;
-+    for (const view of extension.views) {
-+      currentContext = view;
-+    }
-+    if (!currentContext) {
-+      // We didn't find the extension context for the current target.
-+      // E.g. the extension does not have a background page.
-+      // Obtain the storage principal from the main process, which does not require
-+      // a context object
-+      result = await this.selectBackendInParent(this.addonId);
-+    } else {
-+      result = await ExtensionStorageIDB.selectBackend(currentContext);
-+    }
-+
-+    const {backendEnabled, storagePrincipal} = result;
++    const {
++      backendEnabled,
++      storagePrincipal,
++    } = await this.selectBackendInParent(extension.id);
 +
 +    if (!backendEnabled) {
 +      // IDB backend disabled; give up.
@@ -470,7 +451,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,326 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -532,31 +513,17 @@ new file mode 100644
 +* values map to the file contents
 +* @return {Object} - The extension configuration object
 +*/
-+function getExtensionConfig({background, files} = {}) {
++function getExtensionConfig(options = {}) {
 +  const baseConfig = {
 +    manifest: {
 +      permissions: ["storage"],
 +    },
 +    useAddonManager: "temporary",
 +  };
-+  // TODO: This is ugly and hard to follow; consider a switch statement or other approach
-+  if (!background && !files) {
-+    return baseConfig;
-+  } else if (files) {
-+    return {
-+      files,
-+      ...baseConfig,
-+    };
-+  } else if (background) {
-+    return {
-+      background,
-+      ...baseConfig,
-+    };
-+  }
++
 +  return {
-+    background,
-+    files,
 +    ...baseConfig,
++    ...options,
 +  };
 +}
 +
@@ -582,6 +549,45 @@ new file mode 100644
 +  await target.destroy();
 +  await extension.unload();
 +}
++
++/**
++* A generic extension script that can be used in any extension context (e.g. a
++* background script or an extension page script loaded in a tab).
++*/
++async function extensionScriptWithMessageListener() {
++  browser.test.onMessage.addListener(async (msg, ...args) => {
++    switch (msg) {
++      case "storage-local-set":
++        await browser.storage.local.set(args[0]);
++        break;
++      default:
++        browser.test.fail(`Unexpected test message: ${msg}`);
++    }
++
++    browser.test.sendMessage(`${msg}:done`);
++  });
++  browser.test.sendMessage("extension-origin", window.location.origin);
++}
++
++/**
++* Shared files for a test extension that has no background page but adds storage
++* items via a transient extension page in a tab
++*/
++const ext_no_bg = {
++  files: {
++    "extension_page_in_tab.html": `<!DOCTYPE html>
++      <html>
++        <head>
++          <meta charset="utf-8">
++        </head>
++        <body>
++          <h1>Extension Page in a Tab</h1>
++          <script src="extension_page_in_tab.js"></script>
++        </body>
++      </html>`,
++    "extension_page_in_tab.js": extensionScriptWithMessageListener,
++  },
++};
 +
 +add_task(async function test_extension_store_exists() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
@@ -615,25 +621,16 @@ new file mode 100644
 +  await shutdown(extension, target);
 +});
 +
-+add_task(async function test_local_storage_update() {
-+  async function background() {
-+    browser.test.onMessage.addListener(async (msg, ...args) => {
-+      switch (msg) {
-+        case "storage-local-set":
-+          await browser.storage.local.set(args[0]);
-+          break;
-+        default:
-+          browser.test.fail(`Unexpected test message: ${msg}`);
-+      }
-+
-+      browser.test.sendMessage(`${msg}:done`);
-+    });
-+
-+    browser.test.sendMessage("extension-origin", window.location.origin);
-+  }
-+
++/**
++* Test case: Bg page adds item while inspector is open.
++* - Load extension with background page.
++* - Open the add-on inspector.
++* - With the inspector still open, add an item from the background page.
++* - The data in the inspector should match the item added by the extension.
++*/
++add_task(async function test_local_storage_live_update() {
 +  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background})
++    getExtensionConfig({background: extensionScriptWithMessageListener})
 +  );
 +
 +  await extension.startup();
@@ -641,7 +638,7 @@ new file mode 100644
 +  const host = await extension.awaitMessage("extension-origin");
 +
 +  const {target} = await setupExtensionDebuggingToolbox(extension.id);
-+  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
++  // This effectively opens the storage inspector by calling listStores
 +  const extensionStorage = await getExtensionStorage(target);
 +
 +  let {data} = await extensionStorage.getStoreObjects(host);
@@ -663,65 +660,31 @@ new file mode 100644
 +});
 +
 +/**
-+* Storage updates should work correctly if an extension has no background script, but
-+* adds storage items via some other transient script, like from an extension page in a tab
-+*
-+* Test case: Load extension with no background page. Open an extension page in a tab that
-+* adds local storage items. With the extension page still open, open the add-on inspector.
-+* The data in the inspector should match the items added by the extension.
++* Test case: No bg page. Transient page adds item before inspector opened.
++* - Load extension with no background page.
++* - Open an extension page in a tab that adds a local storage item.
++* - With the extension page still open, open the add-on inspector.
++* - The data in the inspector should match the items added by the extension.
 +*/
-+add_task(async function test_local_storage_no_background_script_ext_page_open() {
-+  async function extension_page_in_tab() {
-+    // TODO: This message listener code is virtually identical to that in the task above
-+    // for my background script. Make DRYer
-+    browser.test.onMessage.addListener(async (msg, ...args) => {
-+      switch (msg) {
-+        case "storage-local-set":
-+          await browser.storage.local.set(args[0]);
-+          break;
-+        default:
-+          browser.test.fail(`Unexpected test message: ${msg}`);
-+      }
-+      browser.test.sendMessage(`${msg}:done`);
-+    });
-+    window.onload = () => {
-+      browser.test.sendMessage("extension-origin", window.location.origin);
-+    };
-+  }
-+
-+  const files = {
-+    "extension_page_in_tab.html": `<!DOCTYPE html>
-+      <html>
-+        <head>
-+          <meta charset="utf-8">
-+        </head>
-+        <body>
-+          <h1>Extension Page in a Tab</h1>
-+          <script src="extension_page_in_tab.js"></script>
-+        </body>
-+      </html>`,
-+    "extension_page_in_tab.js": extension_page_in_tab,
-+  };
-+
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({files}));
++add_task(async function test_local_storage_ext_no_bg_with_ext_page_open() {
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
++    files: ext_no_bg.files,
++  }));
 +
 +  await extension.startup();
 +
 +  const url = `moz-extension://${extension.uuid}/extension_page_in_tab.html`;
 +  BrowserTestUtils.addTab(gBrowser, url);
 +
-+  // TODO add info("statement about milestones in each test") in places as helpful
-+  // e.g. https://searchfox.org/mozilla-central/source/browser/components/extensions/test/browser/browser_ext_browserAction_popup.js#139
 +  const host = await extension.awaitMessage("extension-origin");
 +
 +  extension.sendMessage("storage-local-set", {a: 123});
 +  await extension.awaitMessage("storage-local-set:done");
 +
-+  info("Waiting for addon toolbox storage inspector to open");
 +  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // This effectively opens the storage inspector by calling listStores
 +  const extensionStorage = await getExtensionStorage(target);
 +
-+  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
@@ -735,67 +698,34 @@ new file mode 100644
 +});
 +
 +/**
-+* Storage updates should work correctly if an extension has no background script, but
-+* adds storage items via some other transient script, like from an extension page in a tab
-+*
-+* Test case: Load extension with no background page. Open an extension page in a tab that
-+* adds local storage items. Close all extension pages. Open the add-on inspector.
-+* The data in the inspector should match the items added by the extension.
++* Test case: No bg page. Transient page adds item, then closes before inspector opened.
++* - Load extension with no background page.
++* - Open an extension page in a tab that adds a local storage item.
++* - Close all extension pages.
++* - Open the add-on inspector.
++* - The data in the inspector should match the item added by the extension.
 +*/
-+add_task(async function test_local_storage_no_background_script_no_ext_pages_open() {
-+  async function extension_page_in_tab() {
-+    // TODO: This message listener code is virtually identical to that in the task above
-+    // for my background script. Make DRYer
-+    browser.test.onMessage.addListener(async (msg, ...args) => {
-+      switch (msg) {
-+        case "storage-local-set":
-+          await browser.storage.local.set(args[0]);
-+          break;
-+        default:
-+          browser.test.fail(`Unexpected test message: ${msg}`);
-+      }
-+      browser.test.sendMessage(`${msg}:done`);
-+    });
-+    window.onload = () => {
-+      browser.test.sendMessage("extension-origin", window.location.origin);
-+    };
-+  }
-+  const files = {
-+    "extension_page_in_tab.html": `<!DOCTYPE html>
-+      <html>
-+        <head>
-+          <meta charset="utf-8">
-+        </head>
-+        <body>
-+          <h1>Extension Page in a Tab</h1>
-+          <script src="extension_page_in_tab.js"></script>
-+        </body>
-+      </html>`,
-+    "extension_page_in_tab.js": extension_page_in_tab,
-+  };
-+
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({files}));
++add_task(async function test_local_storage_ext_no_bg_with_no_ext_page_open() {
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
++    files: ext_no_bg.files,
++  }));
 +
 +  await extension.startup();
 +
 +  const url = `moz-extension://${extension.uuid}/extension_page_in_tab.html`;
 +  const tab = BrowserTestUtils.addTab(gBrowser, url);
 +
-+  // TODO add info("statement about milestones in each test") in places as helpful
-+  // e.g. https://searchfox.org/mozilla-central/source/browser/components/extensions/test/browser/browser_ext_browserAction_popup.js#139
 +  const host = await extension.awaitMessage("extension-origin");
 +
 +  extension.sendMessage("storage-local-set", {a: 123});
 +  await extension.awaitMessage("storage-local-set:done");
 +
-+  // Close the extension page in the tab
 +  BrowserTestUtils.removeTab(tab);
 +
-+  info("Waiting for addon toolbox storage inspector to open");
 +  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // This effectively opens the storage inspector by calling listStores
 +  const extensionStorage = await getExtensionStorage(target);
 +
-+  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
@@ -809,62 +739,28 @@ new file mode 100644
 +});
 +
 +/**
-+* Storage updates should work correctly if an extension has no background script, but
-+* adds storage items via some other transient script, like from an extension page in a tab
-+*
-+* Test case: Load extension with no background page. Open the add-on storage inspector.
-+* With the inspector still open, open an extension page in a new tab that adds local
-+* storage items. The inspector should live update, so that its data matches the items
-+* added.
++* Test case: No bg page. Inspector live updates when a transient page adds an item.
++* - Load extension with no background page.
++* - Open the add-on storage inspector.
++* - With the inspector still open, open an extension page in a new tab that adds an item.
++* - The data in the inspector should live update to match the item added by the extension.
 +*/
-+add_task(async function test_local_storage_no_background_script_live_update() {
-+  async function extension_page_in_tab() {
-+    // TODO: This message listener code is virtually identical to that in the task above
-+    // for my background script. Make DRYer
-+    browser.test.onMessage.addListener(async (msg, ...args) => {
-+      switch (msg) {
-+        case "storage-local-set":
-+          await browser.storage.local.set(args[0]);
-+          break;
-+        default:
-+          browser.test.fail(`Unexpected test message: ${msg}`);
-+      }
-+      browser.test.sendMessage(`${msg}:done`);
-+    });
-+    window.onload = () => {
-+      browser.test.sendMessage("extension-origin", window.location.origin);
-+    };
-+  }
-+
-+  const files = {
-+    "extension_page_in_tab.html": `<!DOCTYPE html>
-+      <html>
-+        <head>
-+          <meta charset="utf-8">
-+        </head>
-+        <body>
-+          <h1>Extension Page in a Tab</h1>
-+          <script src="extension_page_in_tab.js"></script>
-+        </body>
-+      </html>`,
-+    "extension_page_in_tab.js": extension_page_in_tab,
-+  };
-+
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({files}));
++add_task(async function test_local_storage_ext_no_bg_live_update() {
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
++    files: ext_no_bg.files,
++  }));
 +
 +  await extension.startup();
 +
 +  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // This effectively opens the storage inspector by calling listStores
 +  const extensionStorage = await getExtensionStorage(target);
 +
 +  const url = `moz-extension://${extension.uuid}/extension_page_in_tab.html`;
 +  BrowserTestUtils.addTab(gBrowser, url);
 +
-+  // TODO add info("statement about milestones in each test") in places as helpful
-+  // e.g. https://searchfox.org/mozilla-central/source/browser/components/extensions/test/browser/browser_ext_browserAction_popup.js#139
 +  const host = await extension.awaitMessage("extension-origin");
 +
-+  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
 +  let {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
 +
@@ -929,14 +825,15 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
 --- a/toolkit/components/extensions/parent/ext-storage.js
 +++ b/toolkit/components/extensions/parent/ext-storage.js
-@@ -1,5 +1,7 @@
- "use strict";
+@@ -8,6 +8,8 @@ XPCOMUtils.defineLazyModuleGetters(this,
+   NativeManifests: "resource://gre/modules/NativeManifests.jsm",
+ });
  
-+/* global ExtensionParent */
++var {ExtensionParent} = ChromeUtils.import("resource://gre/modules/ExtensionParent.jsm");
 +
- XPCOMUtils.defineLazyModuleGetters(this, {
-   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
-   ExtensionStorage: "resource://gre/modules/ExtensionStorage.jsm",
+ var {
+   ExtensionError,
+ } = ExtensionUtils;
 @@ -37,6 +39,21 @@ const lookupManagedStorage = async (exte
    return null;
  };
