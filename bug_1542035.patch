@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1553039428 25200
 #      Tue Mar 19 16:50:28 2019 -0700
-# Node ID ff15d6cde8d7f7382800f6ee0669dcdead99e460
+# Node ID 24784c1ba086b365682ed720131a78bb71765d00
 # Parent  16d953cca41483b114d70a3132fbcfe60755708f
 Bug 1292234 - Prototype extension storage in addon developer toolbox
 
@@ -470,7 +470,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,411 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -797,6 +797,81 @@ new file mode 100644
 +
 +  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
 +  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Storage updates should work correctly if an extension has no background script, but
++* adds storage items via some other transient script, like from an extension page in a tab
++*
++* Test case: Load extension with no background page. Open the add-on storage inspector.
++* With the inspector still open, open an extension page in a new tab that adds local
++* storage items. The inspector should live update, so that its data matches the items
++* added.
++*/
++add_task(async function test_local_storage_no_background_script_live_update() {
++  async function extension_page_in_tab() {
++    // TODO: This message listener code is virtually identical to that in the task above
++    // for my background script. Make DRYer
++    browser.test.onMessage.addListener(async (msg, ...args) => {
++      switch (msg) {
++        case "storage-local-set":
++          await browser.storage.local.set(args[0]);
++          break;
++        default:
++          browser.test.fail(`Unexpected test message: ${msg}`);
++      }
++      browser.test.sendMessage(`${msg}:done`);
++    });
++    window.onload = () => {
++      browser.test.sendMessage("extension-origin", window.location.origin);
++    };
++  }
++
++  const files = {
++    "extension_page_in_tab.html": `<!DOCTYPE html>
++      <html>
++        <head>
++          <meta charset="utf-8">
++        </head>
++        <body>
++          <h1>Extension Page in a Tab</h1>
++          <script src="extension_page_in_tab.js"></script>
++        </body>
++      </html>`,
++    "extension_page_in_tab.js": extension_page_in_tab,
++  };
++
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({files}));
++
++  await extension.startup();
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  const extensionStorage = await getExtensionStorage(target);
++
++  const url = `moz-extension://${extension.uuid}/extension_page_in_tab.html`;
++  BrowserTestUtils.addTab(gBrowser, url);
++
++  // TODO add info("statement about milestones in each test") in places as helpful
++  // e.g. https://searchfox.org/mozilla-central/source/browser/components/extensions/test/browser/browser_ext_browserAction_popup.js#139
++  const host = await extension.awaitMessage("extension-origin");
++
++  // Don't destructure getStoreObjects here, else 'this' binding fails when it's called
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data,
 +    // TODO: value is likely a string because of the storage object spec,
