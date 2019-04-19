@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Bianca Danforth <bdanforth@mozilla.com>
-# Date 1553039428 25200
-#      Tue Mar 19 16:50:28 2019 -0700
-# Node ID e2cabbabf32e45e92eb923cbccacaf44072d7590
-# Parent  16d953cca41483b114d70a3132fbcfe60755708f
-Bug 1292234 - Prototype extension storage in addon developer toolbox
+# Date 1555711627 25200
+#      Fri Apr 19 15:07:07 2019 -0700
+# Node ID 6e55d6330c92def52f62dd6299a0f287e08201b5
+# Parent  ed50266b84e2a489c5e97cf68b98b116d6ce4501
+Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
@@ -439,7 +439,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
 --- a/devtools/server/tests/browser/browser.ini
 +++ b/devtools/server/tests/browser/browser.ini
-@@ -125,6 +125,7 @@ skip-if = e10s # Bug 1183605 - devtools/
+@@ -127,6 +127,7 @@ skip-if = e10s # Bug 1183605 - devtools/
  [browser_storage_listings.js]
  [browser_storage_updates.js]
  skip-if = (verify && debug && (os == 'mac' || os == 'linux'))
@@ -451,7 +451,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,393 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -546,7 +546,9 @@ new file mode 100644
 +* @param {Object} target - The web extension actor targeted by the DevTools client
 +*/
 +async function shutdown(extension, target) {
-+  await target.destroy();
++  if (target) {
++    await target.destroy();
++  }
 +  await extension.unload();
 +}
 +
@@ -768,6 +770,71 @@ new file mode 100644
 +  await extension.awaitMessage("storage-local-set:done");
 +
 +  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Inspector shows extension storage data added prior to extension startup
++* - Load extension that adds a storage item upon receiving a message.
++* - Send it a message to add an item
++* - Uninstall the extension
++* - Reinstall the extension
++* - Open the add-on storage inspector.
++* - The data in the inspector should match the data added the first time the extension
++*   was installed
++* Note: Make sure this task is the last task in the file, since it uses
++* SpecialPowers.pushPrefEnv, and none of our other tasks need these test preferences set.
++*/
++add_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
++  // Use a test-only pref to leave the addonid->uuid mapping around after
++  // uninstall so that we can re-attach to the same storage (this prefEnv
++  // is kept for this entire file and cleared automatically once all the
++  // tests in this file have been executed).
++  await SpecialPowers.pushPrefEnv({
++    set: [["extensions.webextensions.keepUuidOnUninstall", true]],
++  });
++
++  // Set the pref to prevent cleaning up storage on uninstall in a separate prefEnv
++  // so we can pop it below, leaving flags set in the previous prefEnvs unmodified.
++  await SpecialPowers.pushPrefEnv({
++    set: [["extensions.webextensions.keepStorageOnUninstall", true]],
++  });
++
++  let extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener})
++  );
++
++  await extension.startup();
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await shutdown(extension);
++
++  // Reinstall the same extension
++  extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener})
++  );
++
++  await extension.startup();
++
++  await extension.awaitMessage("extension-origin");
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // This effectively opens the storage inspector by calling listStores
++  const extensionStorage = await getExtensionStorage(target);
++
++  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
 +    // TODO: value is likely a string because of the storage object spec,
