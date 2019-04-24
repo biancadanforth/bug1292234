@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Bianca Danforth <bdanforth@mozilla.com>
-# Date 1553039428 25200
-#      Tue Mar 19 16:50:28 2019 -0700
-# Node ID e2cabbabf32e45e92eb923cbccacaf44072d7590
-# Parent  16d953cca41483b114d70a3132fbcfe60755708f
-Bug 1292234 - Prototype extension storage in addon developer toolbox
+# Date 1555711627 25200
+#      Fri Apr 19 15:07:07 2019 -0700
+# Node ID 80986c8d418f02b26217c92776bd8ec2e7f48eb0
+# Parent  ed50266b84e2a489c5e97cf68b98b116d6ce4501
+Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
@@ -26,12 +26,13 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1302,409 @@ StorageActors.createActor({
+@@ -1298,6 +1302,430 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
 +const extensionStorageHelpers = {
 +  unresolvedPromises: new Map(),
++  onChangedListeners: new Map(),
 +
 +  // Sets the parent process message manager
 +  setPpmm(ppmm) {
@@ -59,7 +60,26 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      // storagePrincipal instead
 +      storagePrincipal: parentResult.storagePrincipal.deserialize(this, true),
 +    };
++
++    // Subscribe a listener for the storage.onChanged API event notifications
++    // and keep track of it to remove it when the debugger is being disconnected.
++    const messageName = `Extension:StorageLocalOnChanged:${extension.uuid}`;
++    const onChangedListener = ({name, data}) => {
++      Services.mm.broadcastAsyncMessage(DEVTOOLS_EXT_STORAGELOCAL_CHANGED, {
++        changes: data,
++        extensionUUID: extension.uuid,
++      });
++    };
++    Services.ppmm.addMessageListener(messageName, onChangedListener);
++    this.onChangedListeners.set(messageName, onChangedListener);
 +    return this.backToChild("selectBackendInParent", result);
++  },
++
++  onDisconnected() {
++    // Remove any listener subscribed to intercept storage.onChanged API events.
++    for (const [messageName, listener] of this.onChangedListeners) {
++      Services.ppmm.removeMessageListener(messageName, listener);
++    }
 +  },
 +
 +  // Runs in the main process. This determines what code to execute based on the message
@@ -137,6 +157,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      // this method has finished. This gives us chance to clean up items within
 +      // the parent process e.g. observers.
 +      setMessageManager(null);
++      extensionStorageHelpers.onDisconnected();
 +    },
 +  };
 +};
@@ -439,7 +460,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
 --- a/devtools/server/tests/browser/browser.ini
 +++ b/devtools/server/tests/browser/browser.ini
-@@ -125,6 +125,7 @@ skip-if = e10s # Bug 1183605 - devtools/
+@@ -127,6 +127,7 @@ skip-if = e10s # Bug 1183605 - devtools/
  [browser_storage_listings.js]
  [browser_storage_updates.js]
  skip-if = (verify && debug && (os == 'mac' || os == 'linux'))
@@ -451,7 +472,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,415 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -546,7 +567,9 @@ new file mode 100644
 +* @param {Object} target - The web extension actor targeted by the DevTools client
 +*/
 +async function shutdown(extension, target) {
-+  await target.destroy();
++  if (target) {
++    await target.destroy();
++  }
 +  await extension.unload();
 +}
 +
@@ -778,6 +801,93 @@ new file mode 100644
 +
 +  await shutdown(extension, target);
 +});
++
++/**
++* Test case: Inspector shows extension storage data added prior to extension startup
++* - Load extension that adds a storage item
++* - Uninstall the extension
++* - Reinstall the extension
++* - Open the add-on storage inspector.
++* - The data in the inspector should match the data added the first time the extension
++*   was installed
++* Related test case: Inspector shows extension storage data when an extension that has
++* already migrated to the IndexedDB storage backend prior to extension startup adds
++* another storage item.
++* - (Building from previous steps)
++* - The reinstalled extension adds a storage item
++* - The data in the inspector should live update with both items: the item added from the
++*   first and the item added from the reinstall.
++* Note: Make sure this task is the last task in the file, since it uses
++* SpecialPowers.pushPrefEnv, and none of our other tasks need these test preferences set.
++*/
++add_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
++  // Use a test-only pref to leave the addonid->uuid mapping around after
++  // uninstall so that we can re-attach to the same storage (this prefEnv
++  // is kept for this entire file and cleared automatically once all the
++  // tests in this file have been executed).
++  await SpecialPowers.pushPrefEnv({
++    set: [["extensions.webextensions.keepUuidOnUninstall", true]],
++  });
++
++  // Set the pref to prevent cleaning up storage on uninstall in a separate prefEnv
++  // so we can pop it below, leaving flags set in the previous prefEnvs unmodified.
++  await SpecialPowers.pushPrefEnv({
++    set: [["extensions.webextensions.keepStorageOnUninstall", true]],
++  });
++
++  let extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener})
++  );
++
++  await extension.startup();
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await shutdown(extension);
++
++  // Reinstall the same extension
++  extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener})
++  );
++
++  await extension.startup();
++
++  await extension.awaitMessage("extension-origin");
++
++  const {target} = await setupExtensionDebuggingToolbox(extension.id);
++  // This effectively opens the storage inspector by calling listStores
++  const extensionStorage = await getExtensionStorage(target);
++
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  // Related test case
++  extension.sendMessage("storage-local-set", {b: 456});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [
++      {name: "a", value: {str: "123"}},
++      {name: "b", value: {str: "456"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
@@ -822,6 +932,31 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
  types.addDictType("cacheobject", {
    "url": "string",
    "status": "string",
+diff --git a/toolkit/components/extensions/ExtensionStorageIDB.jsm b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+--- a/toolkit/components/extensions/ExtensionStorageIDB.jsm
++++ b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+@@ -599,6 +599,11 @@ this.ExtensionStorageIDB = {
+         const serializedPrincipal = new StructuredCloneHolder(storagePrincipal, this);
+ 
+         promise = migrateJSONFileData(extension, storagePrincipal).then(() => {
++          extension.setSharedData("storageIDBBackend", true);
++          if (storagePrincipal) {
++            extension.setSharedData("storageIDBPrincipal", storagePrincipal);
++          }
++          Services.ppmm.sharedData.flush();
+           return {backendEnabled: true, storagePrincipal: serializedPrincipal};
+         }).catch(err => {
+           // If the data migration promise is rejected, the old data has been read
+@@ -612,6 +617,9 @@ this.ExtensionStorageIDB = {
+           // data about it may be useful.
+           extension.logWarning("JSONFile backend is being kept enabled by an unexpected " +
+                                `IDBBackend failure: ${err.message}::${err.stack}`);
++          extension.setSharedData("storageIDBBackend", false);
++          Services.ppmm.sharedData.flush();
++
+           return {backendEnabled: false};
+         });
+       }
 diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
 --- a/toolkit/components/extensions/parent/ext-storage.js
 +++ b/toolkit/components/extensions/parent/ext-storage.js
