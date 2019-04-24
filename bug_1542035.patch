@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1555711627 25200
 #      Fri Apr 19 15:07:07 2019 -0700
-# Node ID 92bbac4c25aebae6817b49acfb15691a7492017a
+# Node ID 80986c8d418f02b26217c92776bd8ec2e7f48eb0
 # Parent  ed50266b84e2a489c5e97cf68b98b116d6ce4501
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -932,6 +932,31 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
  types.addDictType("cacheobject", {
    "url": "string",
    "status": "string",
+diff --git a/toolkit/components/extensions/ExtensionStorageIDB.jsm b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+--- a/toolkit/components/extensions/ExtensionStorageIDB.jsm
++++ b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+@@ -599,6 +599,11 @@ this.ExtensionStorageIDB = {
+         const serializedPrincipal = new StructuredCloneHolder(storagePrincipal, this);
+ 
+         promise = migrateJSONFileData(extension, storagePrincipal).then(() => {
++          extension.setSharedData("storageIDBBackend", true);
++          if (storagePrincipal) {
++            extension.setSharedData("storageIDBPrincipal", storagePrincipal);
++          }
++          Services.ppmm.sharedData.flush();
+           return {backendEnabled: true, storagePrincipal: serializedPrincipal};
+         }).catch(err => {
+           // If the data migration promise is rejected, the old data has been read
+@@ -612,6 +617,9 @@ this.ExtensionStorageIDB = {
+           // data about it may be useful.
+           extension.logWarning("JSONFile backend is being kept enabled by an unexpected " +
+                                `IDBBackend failure: ${err.message}::${err.stack}`);
++          extension.setSharedData("storageIDBBackend", false);
++          Services.ppmm.sharedData.flush();
++
+           return {backendEnabled: false};
+         });
+       }
 diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
 --- a/toolkit/components/extensions/parent/ext-storage.js
 +++ b/toolkit/components/extensions/parent/ext-storage.js
