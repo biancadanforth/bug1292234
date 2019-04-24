@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1555711627 25200
 #      Fri Apr 19 15:07:07 2019 -0700
-# Node ID 80986c8d418f02b26217c92776bd8ec2e7f48eb0
+# Node ID e54532d167f067637e99eb269cffd02d9062a021
 # Parent  ed50266b84e2a489c5e97cf68b98b116d6ce4501
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -472,7 +472,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,415 @@
+@@ -0,0 +1,431 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -766,7 +766,11 @@ new file mode 100644
 +* - Load extension with no background page.
 +* - Open the add-on storage inspector.
 +* - With the inspector still open, open an extension page in a new tab that adds an item.
-+* - The data in the inspector should live update to match the item added by the extension.
++* - Assert:
++*   - The data in the inspector should live update to match the item added by the
++*     extension.
++*   - If an extension page adds the same data again, the data in the inspector should
++*     not change.
 +*/
 +add_task(async function test_local_storage_ext_no_bg_live_update() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
@@ -797,6 +801,18 @@ new file mode 100644
 +    // but it should actually reflect the actual stored type.
 +    [{name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
++  );
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    // TODO: value is likely a string because of the storage object spec,
++    // but it should actually reflect the actual stored type.
++    [{name: "a", value: {str: "123"}}],
++    "The results are unchanged when an extension page adds duplicate items"
 +  );
 +
 +  await shutdown(extension, target);
