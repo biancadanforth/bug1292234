@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1555711627 25200
 #      Fri Apr 19 15:07:07 2019 -0700
-# Node ID 5dfea890512b9e054fc3d59ea1126c4c4d9f03ab
-# Parent  ed50266b84e2a489c5e97cf68b98b116d6ce4501
+# Node ID 29f81a7142564a41127a44d100303f638c859c29
+# Parent  11b4d70a2b5d6373f5ec8fa01ca48a1c7bc1829e
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
@@ -27,7 +27,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1303,433 @@ StorageActors.createActor({
+@@ -1298,6 +1303,442 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -414,16 +414,25 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      return;
 +    }
 +
-+    let {name, value} = items;
++    const {name, value} = items;
 +    // If the name changed, remove the previous entry in storage by the old name first
 +    if (field === "name") {
 +      const changes = await db.remove(oldValue);
 +      this.fireOnChangedExtensionEvent(host, changes);
 +    }
 +
-+    value = parseItemValue(value);
++    // Attempt to interpret the data type of the value
++    let newValue = parseItemValue(name, value);
++    if (newValue === value) {
++      try {
++        newValue = JSON.parse(value);
++      } catch (error) {
++        // Value couldn't be parsed; just use what we started with
++        newValue = value;
++      }
++    }
 +
-+    const changes = await db.set({[name]: value});
++    const changes = await db.set({[name]: newValue});
 +    this.fireOnChangedExtensionEvent(host, changes);
 +  },
 +
@@ -476,7 +485,7 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,532 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -582,21 +591,21 @@ new file mode 100644
 +* background script or an extension page script loaded in a tab).
 +*/
 +async function extensionScriptWithMessageListener() {
-+  let valueType;
++  let valType;
 +  browser.test.onMessage.addListener(async (msg, ...args) => {
 +    switch (msg) {
 +      case "storage-local-set":
 +        await browser.storage.local.set(args[0]);
 +        const item = args[0];
-+        valueType = typeof item[Object.keys(item)[0]];
++        valType = typeof item[Object.keys(item)[0]];
 +        await browser.storage.local.set(item);
 +        break;
 +      case "storage-local-get":
 +        const {key} = args[0];
-+        valueType = args[0].valueType || valueType;
++        valType = args[0].valType || valType;
 +        const value = (await browser.storage.local.get(key))[key];
 +        browser.test.assertTrue(
-+          (typeof value === valueType),
++          (typeof value === valType),
 +          "The data type for the storage item's value is unchanged."
 +        );
 +        break;
@@ -863,11 +872,16 @@ new file mode 100644
 +  * Compares the data type for the modified value of a storage item between
 +  * the extension and the inspector.
 +  * @param {Object} item - The storage item to modify
-+  * @param {primitive|Object} newValue - The new value for the storage item
++  * @param {string} newVal - The new value for the storage item, expressed as a string
++  * @param {string} valType - The expected result of 'typeof' once newValue is parsed
++  * in the storage actor
 +  * @param {Boolean} inExtension - True if the item's value should be modified
 +  * by the extension. False if it should be modified by the storage inspector.
++  * @param {string} parsedVal - Optional - The parsed value obtained in the storage actor.
++  * This is useful for objects where spaces and escape characters can cause two
++  * functionally equivalent values to fail a strict equals check.
 +  */
-+  async function verifyItemValueTypeUnchanged(item, newValue, inExtension) {
++  async function verifyItemValueType(item, newVal, valType, inExtension, parsedVal) {
 +    const key = Object.keys(item)[0];
 +    const oldValue = item[key];
 +
@@ -878,7 +892,7 @@ new file mode 100644
 +      await extensionStorage.editItem({
 +        host,
 +        field: "value",
-+        items: {name: key, value: newValue},
++        items: {name: key, value: newVal},
 +        oldValue,
 +      });
 +    }
@@ -893,25 +907,27 @@ new file mode 100644
 +      // by the next assertion in the test extension.
 +      [{
 +        name: key,
-+        value: {str: typeof newValue !== "string" ? JSON.stringify(newValue) : newValue},
++        value: {str: parsedVal || newVal},
 +      }],
 +      "Got the expected results on populated storage.local"
 +    );
 +
 +    // The extension asserts the data type is unchanged
-+    extension.sendMessage("storage-local-get", {key, valueType: typeof newValue});
++    extension.sendMessage("storage-local-get", {key, valType});
 +    await extension.awaitMessage("storage-local-get:done");
 +  }
 +
-+  await verifyItemValueTypeUnchanged({a: 123}, 123, true);
++  await verifyItemValueType({a: 123}, "123", "number", true);
 +
-+  await verifyItemValueTypeUnchanged({a: 123}, 456, false);
++  await verifyItemValueType({a: 123}, "true", "boolean", false);
 +
-+  await verifyItemValueTypeUnchanged({a: 123}, true, false);
++  await verifyItemValueType({a: 123}, "hi", "string", false);
 +
-+  await verifyItemValueTypeUnchanged({a: 123}, "string", false);
++  await verifyItemValueType({a: 123}, "{b: 789}", "object", false, "{\"b\":789}");
 +
-+  await verifyItemValueTypeUnchanged({a: 123}, {b: 789}, false);
++  await verifyItemValueType({a: 123}, "[1, 2, 3]", "object", false, "[1,2,3]");
++
++  await verifyItemValueType({a: 123}, "null", "object", false);
 +
 +  await shutdown(extension, target);
 +});
@@ -1079,7 +1095,7 @@ diff --git a/devtools/shared/storage/utils.js b/devtools/shared/storage/utils.js
 new file mode 100644
 --- /dev/null
 +++ b/devtools/shared/storage/utils.js
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,147 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1216,6 +1232,11 @@ new file mode 100644
 +
 +  if (!obj && value) {
 +    obj = _extractKeyValPairs(value);
++  }
++
++  // return if obj is null, or same as value, or just a string.
++  if (!obj || obj === value || typeof obj === "string") {
++    return value;
 +  }
 +
 +  return obj;
