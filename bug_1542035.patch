@@ -2,10 +2,6456 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1555711627 25200
 #      Fri Apr 19 15:07:07 2019 -0700
-# Node ID 29f81a7142564a41127a44d100303f638c859c29
+# Node ID 268055fffba18e272968f39dd3cb100b473581bf
 # Parent  11b4d70a2b5d6373f5ec8fa01ca48a1c7bc1829e
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
+diff --git a/devtools/client/shared/vendor/jsol.js b/devtools/client/shared/vendor/jsol.js
+deleted file mode 100755
+--- a/devtools/client/shared/vendor/jsol.js
++++ /dev/null
+@@ -1,97 +0,0 @@
+-/*
+- * Copyright 2010, Google Inc.
+- * All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions are
+- * met:
+- *
+- *     * Redistributions of source code must retain the above copyright
+- * notice, this list of conditions and the following disclaimer.
+- *     * Redistributions in binary form must reproduce the above
+- * copyright notice, this list of conditions and the following disclaimer
+- * in the documentation and/or other materials provided with the
+- * distribution.
+- *     * Neither the name of Google Inc. nor the names of its
+- * contributors may be used to endorse or promote products derived from
+- * this software without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+- */
+-(function () {
+-  /**
+-   JSOL stands for JavaScript Object Literal which is a string representing
+-   an object in JavaScript syntax.
+-
+-   For example:
+-
+-   {foo:"bar"} is equivalent to {"foo":"bar"} in JavaScript. Both are valid JSOL.
+-
+-   Note that {"foo":"bar"} is proper JSON[1] therefore you can use one of the many
+-   JSON parsers out there like json2.js[2] or even the native browser's JSON parser,
+-   if available.
+-
+-   However, {foo:"bar"} is NOT proper JSON but valid Javascript syntax for
+-   representing an object with one key, "foo" and its value, "bar".
+-   Using a JSON parser is not an option since this is NOT proper JSON.
+-
+-   You can use JSOL.parse to safely parse any string that reprsents a JavaScript Object Literal.
+-   JSOL.parse will throw an Invalid JSOL exception on function calls, function declarations and variable references.
+-
+-   Examples:
+-
+-   JSOL.parse('{foo:"bar"}');  // valid
+-
+-   JSOL.parse('{evil:(function(){alert("I\'m evil");})()}');  // invalid function calls
+-
+-   JSOL.parse('{fn:function() { }}'); // invalid function declarations
+-
+-   var bar = "bar";
+-   JSOL.parse('{foo:bar}');  // invalid variable references
+-
+-   [1] http://www.json.org
+-   [2] http://www.json.org/json2.js
+-   */
+-  var trim =  /^(\s|\u00A0)+|(\s|\u00A0)+$/g; // Used for trimming whitespace
+-  var JSOL = {
+-    parse: function(text) {
+-      // make sure text is a "string"
+-      if (typeof text !== "string" || !text) {
+-        return null;
+-      }
+-      // Make sure leading/trailing whitespace is removed
+-      text = text.replace(trim, "");
+-      // Make sure the incoming text is actual JSOL (or Javascript Object Literal)
+-      // Logic borrowed from http://json.org/json2.js
+-      if ( /^[\],:{}\s]*$/.test(text.replace(/\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4})/g, "@")
+-           .replace(/"[^"\\\n\r]*"|true|false|null|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?/g, "]")
+-           .replace(/(?:^|:|,)(?:\s*\[)+/g, ":")
+-           /** everything up to this point is json2.js **/
+-           /** this is the 5th stage where it accepts unquoted keys **/
+-           .replace(/\w*\s*\:/g, ":")) ) {
+-        return (new Function("return " + text))();
+-      }
+-      else {
+-        throw("Invalid JSOL: " + text);
+-      }
+-    }
+-  };
+-
+-  if (typeof define === "function" && define.amd) {
+-    define(JSOL);
+-  } else if (typeof module === "object" && module.exports) {
+-    module.exports = JSOL;
+-  } else {
+-    this.JSOL = JSOL;
+-  }
+-})();
+diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
+--- a/devtools/client/shared/vendor/moz.build
++++ b/devtools/client/shared/vendor/moz.build
+@@ -4,15 +4,10 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+-DIRS += [
+-    'stringvalidator',
+-]
+-
+ DevToolsModules(
+     'fluent-react.js',
+     'fluent.js',
+     'immutable.js',
+-    'jsol.js',
+     'jszip.js',
+     'lodash.js',
+     'react-dom-factories.js',
+diff --git a/devtools/client/shared/vendor/stringvalidator/UPDATING.md b/devtools/client/shared/vendor/stringvalidator/UPDATING.md
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/UPDATING.md
++++ /dev/null
+@@ -1,142 +0,0 @@
+-# Updating this library
+-
+-1. Replace the contents of validator.js with the contents of https://github.com/chriso/validator.js/blob/master/validator.js.
+-
+-2. Add the following methods:
+-   ```
+-   // see http://isrc.ifpi.org/en/isrc-standard/code-syntax
+-   var isrc = /^[A-Z]{2}[0-9A-Z]{3}\d{2}\d{5}$/;
+-
+-   function isISRC(str) {
+-     assertString(str);
+-     return isrc.test(str);
+-   }
+-   ```
+-
+-   ```
+-   var cultureCodes = new Set(["ar", "bg", "ca", "zh-Hans", "cs", "da", "de",
+-   "el", "en", "es", "fi", "fr", "he", "hu", "is", "it", "ja", "ko", "nl", "no",
+-   "pl", "pt", "rm", "ro", "ru", "hr", "sk", "sq", "sv", "th", "tr", "ur", "id",
+-   "uk", "be", "sl", "et", "lv", "lt", "tg", "fa", "vi", "hy", "az", "eu", "hsb",
+-   "mk", "tn", "xh", "zu", "af", "ka", "fo", "hi", "mt", "se", "ga", "ms", "kk",
+-   "ky", "sw", "tk", "uz", "tt", "bn", "pa", "gu", "or", "ta", "te", "kn", "ml",
+-   "as", "mr", "sa", "mn", "bo", "cy", "km", "lo", "gl", "kok", "syr", "si", "iu",
+-   "am", "tzm", "ne", "fy", "ps", "fil", "dv", "ha", "yo", "quz", "nso", "ba", "lb",
+-   "kl", "ig", "ii", "arn", "moh", "br", "ug", "mi", "oc", "co", "gsw", "sah",
+-   "qut", "rw", "wo", "prs", "gd", "ar-SA", "bg-BG", "ca-ES", "zh-TW", "cs-CZ",
+-   "da-DK", "de-DE", "el-GR", "en-US", "fi-FI", "fr-FR", "he-IL", "hu-HU", "is-IS",
+-   "it-IT", "ja-JP", "ko-KR", "nl-NL", "nb-NO", "pl-PL", "pt-BR", "rm-CH", "ro-RO",
+-   "ru-RU", "hr-HR", "sk-SK", "sq-AL", "sv-SE", "th-TH", "tr-TR", "ur-PK", "id-ID",
+-   "uk-UA", "be-BY", "sl-SI", "et-EE", "lv-LV", "lt-LT", "tg-Cyrl-TJ", "fa-IR",
+-   "vi-VN", "hy-AM", "az-Latn-AZ", "eu-ES", "hsb-DE", "mk-MK", "tn-ZA", "xh-ZA",
+-   "zu-ZA", "af-ZA", "ka-GE", "fo-FO", "hi-IN", "mt-MT", "se-NO", "ms-MY", "kk-KZ",
+-   "ky-KG", "sw-KE", "tk-TM", "uz-Latn-UZ", "tt-RU", "bn-IN", "pa-IN", "gu-IN",
+-   "or-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "as-IN", "mr-IN", "sa-IN", "mn-MN",
+-   "bo-CN", "cy-GB", "km-KH", "lo-LA", "gl-ES", "kok-IN", "syr-SY", "si-LK",
+-   "iu-Cans-CA", "am-ET", "ne-NP", "fy-NL", "ps-AF", "fil-PH", "dv-MV",
+-   "ha-Latn-NG", "yo-NG", "quz-BO", "nso-ZA", "ba-RU", "lb-LU", "kl-GL", "ig-NG",
+-   "ii-CN", "arn-CL", "moh-CA", "br-FR", "ug-CN", "mi-NZ", "oc-FR", "co-FR",
+-   "gsw-FR", "sah-RU", "qut-GT", "rw-RW", "wo-SN", "prs-AF", "gd-GB", "ar-IQ",
+-   "zh-CN", "de-CH", "en-GB", "es-MX", "fr-BE", "it-CH", "nl-BE", "nn-NO", "pt-PT",
+-   "sr-Latn-CS", "sv-FI", "az-Cyrl-AZ", "dsb-DE", "se-SE", "ga-IE", "ms-BN",
+-   "uz-Cyrl-UZ", "bn-BD", "mn-Mong-CN", "iu-Latn-CA", "tzm-Latn-DZ", "quz-EC",
+-   "ar-EG", "zh-HK", "de-AT", "en-AU", "es-ES", "fr-CA", "sr-Cyrl-CS", "se-FI",
+-   "quz-PE", "ar-LY", "zh-SG", "de-LU", "en-CA", "es-GT", "fr-CH", "hr-BA",
+-   "smj-NO", "ar-DZ", "zh-MO", "de-LI", "en-NZ", "es-CR", "fr-LU", "bs-Latn-BA",
+-   "smj-SE", "ar-MA", "en-IE", "es-PA", "fr-MC", "sr-Latn-BA", "sma-NO", "ar-TN",
+-   "en-ZA", "es-DO", "sr-Cyrl-BA", "sma-SE", "ar-OM", "en-JM", "es-VE",
+-   "bs-Cyrl-BA", "sms-FI", "ar-YE", "en-029", "es-CO", "sr-Latn-RS", "smn-FI",
+-   "ar-SY", "en-BZ", "es-PE", "sr-Cyrl-RS", "ar-JO", "en-TT", "es-AR", "sr-Latn-ME",
+-   "ar-LB", "en-ZW", "es-EC", "sr-Cyrl-ME", "ar-KW", "en-PH", "es-CL", "ar-AE",
+-   "es-UY", "ar-BH", "es-PY", "ar-QA", "en-IN", "es-BO", "en-MY", "es-SV", "en-SG",
+-   "es-HN", "es-NI", "es-PR", "es-US", "bs-Cyrl", "bs-Latn", "sr-Cyrl", "sr-Latn",
+-   "smn", "az-Cyrl", "sms", "zh", "nn", "bs", "az-Latn", "sma", "uz-Cyrl",
+-   "mn-Cyrl", "iu-Cans", "zh-Hant", "nb", "sr", "tg-Cyrl", "dsb", "smj", "uz-Latn",
+-   "mn-Mong", "iu-Latn", "tzm-Latn", "ha-Latn", "zh-CHS", "zh-CHT"]);
+-
+-   function isRFC5646(str) {
+-     assertString(str);
+-     // According to the spec these codes are case sensitive so we can check the
+-     // string directly.
+-     return cultureCodes.has(str);
+-   }
+-   ```
+-
+-   ```
+-   var semver =  /^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$/i
+-
+-   function isSemVer(str) {
+-     assertString(str);
+-     return semver.test(str);
+-   }
+-   ```
+-
+-   ```
+-   var rgbcolor =  /^rgb?\(\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*\)$/i
+-
+-   function isRGBColor(str) {
+-     assertString(str);
+-     return rgbcolor.test(str);
+-   }
+-   ```
+-
+-3. Add the following to the validator object towards the end of the file:
+-   ```
+-   isISRC: isISRC,
+-   isRFC5646: isRFC5646,
+-   isSemVer: isSemVer,
+-   isRGBColor: isRGBColor,
+-   ```
+-
+-4. Look for the phones array just above the isMobilePhone() method.
+-
+-   1. Replace the en-HK regex with:
+-      ```
+-      // According to http://www.ofca.gov.hk/filemanager/ofca/en/content_311/no_plan.pdf
+-      'en-HK': /^(\+?852-?)?((4(04[01]|06\d|09[3-9]|20\d|2[2-9]\d|3[3-9]\d|[467]\d{2}|5[1-9]\d|81\d|82[1-9]|8[69]\d|92[3-9]|95[2-9]|98\d)|5([1-79]\d{2})|6(0[1-9]\d|[1-9]\d{2})|7(0[1-9]\d|10[4-79]|11[458]|1[24578]\d|13[24-9]|16[0-8]|19[24579]|21[02-79]|2[456]\d|27[13-6]|3[456]\d|37[4578]|39[0146])|8(1[58]\d|2[45]\d|267|27[5-9]|2[89]\d|3[15-9]\d|32[5-8]|[46-9]\d{2}|5[013-9]\d)|9(0[1-9]\d|1[02-9]\d|[2-8]\d{2}))-?\d{4}|7130-?[0124-8]\d{3}|8167-?2\d{3})$/,
+-      ```
+-   2. Add:
+-      ```
+-      'ko-KR': /^((\+?82)[ \-]?)?0?1([0|1|6|7|8|9]{1})[ \-]?\d{3,4}[ \-]?\d{4}$/,
+-      'lt-LT': /^(\+370|8)\d{8}$/,
+-      ```
+-
+-5. Replace the isMobilePhone() method with:
+-   ```
+-   function isMobilePhone(str, locale) {
+-     assertString(str);
+-     if (locale in phones) {
+-       return phones[locale].test(str);
+-     } else if (locale === 'any') {
+-       return !!Object.values(phones).find(phone => phone.test(str));
+-     }
+-     return false;
+-   }
+-   ```
+-
+-6. Delete the notBase64 regex and replace the isBase64 with:
+-   ```
+-   function isBase64(str) {
+-     assertString(str);
+-     // Value length must be divisible by 4.
+-     var len = str.length;
+-     if (!len || len % 4 !== 0) {
+-       return false;
+-     }
+-
+-     try {
+-       if (atob(str)) {
+-         return true;
+-       }
+-     } catch (e) {
+-       return false;
+-     }
+-   }
+-   ```
+-
+-7. Do not replace the test files as they have been converted to xpcshell tests. If there are new methods then add their tests to the `test_sanitizers.js` or `test_validators.js` files as appropriate.
+-
+-8. To test the library please run the following:
+-   ```
+-   ./mach xpcshell-test devtools/client/shared/vendor/stringvalidator/
+-   ```
+diff --git a/devtools/client/shared/vendor/stringvalidator/moz.build b/devtools/client/shared/vendor/stringvalidator/moz.build
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/moz.build
++++ /dev/null
+@@ -1,15 +0,0 @@
+-# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
+-# vim: set filetype=python:
+-# This Source Code Form is subject to the terms of the Mozilla Public
+-# License, v. 2.0. If a copy of the MPL was not distributed with this
+-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-
+-DIRS += [
+-    'util'
+-]
+-
+-XPCSHELL_TESTS_MANIFESTS += ['tests/unit/xpcshell.ini']
+-
+-DevToolsModules(
+-    'validator.js',
+-)
+diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js b/devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js
++++ /dev/null
+@@ -1,15 +0,0 @@
+-"use strict";
+-
+-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+-
+-this.validator = require("devtools/client/shared/vendor/stringvalidator/validator");
+-
+-function describe(suite, testFunc) {
+-  info(`\n                            Test suite: ${suite}`.toUpperCase());
+-  testFunc();
+-}
+-
+-function it(description, testFunc) {
+-  info(`\n                              - ${description}:\n`.toUpperCase());
+-  testFunc();
+-}
+diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_sanitizers.js b/devtools/client/shared/vendor/stringvalidator/tests/unit/test_sanitizers.js
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_sanitizers.js
++++ /dev/null
+@@ -1,420 +0,0 @@
+-/* -*- Mode: js; tab-width: 2; indent-tabs-mode: nil; js-indent-level: 2; fill-column: 80 -*- */
+-/*
+- * Copyright 2013 Mozilla Foundation and contributors
+- * Licensed under the New BSD license. See LICENSE.md or:
+- * http://opensource.org/licenses/BSD-2-Clause
+- */
+-
+- "use strict";
+-
+-function test(options) {
+-  var args = options.args || [];
+-
+-  args.unshift(null);
+-
+-  Object.keys(options.expect).forEach(function (input) {
+-    args[0] = input;
+-
+-    var result = validator[options.sanitizer](...args);
+-    var expected = options.expect[input];
+-    let argsString = args.join(', ');
+-
+-    if (isNaN(result) && !result.length && isNaN(expected)) {
+-      ok(true, `validator.${options.sanitizer}(${argsString}) returned "${result}"`);
+-    } else {
+-      equal(result, expected, `validator.${options.sanitizer}("${argsString}") ` +
+-                              `returned "${result}"`);
+-    }
+-  });
+-}
+-
+-function run_test() {
+-  describe('Sanitizers', function () {
+-    it('should sanitize boolean strings', function () {
+-      test({
+-        sanitizer: 'toBoolean',
+-        expect: {
+-          '0': false,
+-          '': false,
+-          '1': true,
+-          'true': true,
+-          'foobar': true,
+-          '   ': true,
+-        },
+-      });
+-      test({
+-        sanitizer: 'toBoolean',
+-        args: [true], // strict
+-        expect: {
+-          '0': false,
+-          '': false,
+-          '1': true,
+-          'true': true,
+-          'foobar': false,
+-          '   ': false,
+-        },
+-      });
+-    });
+-
+-    it('should trim whitespace', function () {
+-      test({
+-        sanitizer: 'trim',
+-        expect: {
+-          '  \r\n\tfoo  \r\n\t   ': 'foo',
+-          '      \r': '',
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'ltrim',
+-        expect: {
+-          '  \r\n\tfoo  \r\n\t   ': 'foo  \r\n\t   ',
+-          '   \t  \n': '',
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'rtrim',
+-        expect: {
+-          '  \r\n\tfoo  \r\n\t   ': '  \r\n\tfoo',
+-          ' \r\n  \t': '',
+-        },
+-      });
+-    });
+-
+-    it('should trim custom characters', function () {
+-      test({
+-        sanitizer: 'trim',
+-        args: ['01'],
+-        expect: { '010100201000': '2' },
+-      });
+-
+-      test({
+-        sanitizer: 'ltrim',
+-        args: ['01'],
+-        expect: { '010100201000': '201000' },
+-      });
+-
+-      test({
+-        sanitizer: 'rtrim',
+-        args: ['01'],
+-        expect: { '010100201000': '0101002' },
+-      });
+-    });
+-
+-    it('should convert strings to integers', function () {
+-      test({
+-        sanitizer: 'toInt',
+-        expect: {
+-          '3': 3,
+-          ' 3 ': 3,
+-          '2.4': 2,
+-          'foo': NaN,
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'toInt',
+-        args: [16],
+-        expect: { 'ff': 255 },
+-      });
+-    });
+-
+-    it('should convert strings to floats', function () {
+-      test({
+-        sanitizer: 'toFloat',
+-        expect: {
+-          '2': 2.0,
+-          '2.': 2.0,
+-          '-2.5': -2.5,
+-          '.5': 0.5,
+-          'foo': NaN,
+-        },
+-      });
+-    });
+-
+-    it('should escape HTML', function () {
+-      test({
+-        sanitizer: 'escape',
+-        expect: {
+-          '<script> alert("xss&fun"); </script>':
+-              '&lt;script&gt; alert(&quot;xss&amp;fun&quot;); &lt;&#x2F;script&gt;',
+-
+-          "<script> alert('xss&fun'); </script>":
+-              '&lt;script&gt; alert(&#x27;xss&amp;fun&#x27;); &lt;&#x2F;script&gt;',
+-
+-          'Backtick: `':
+-              'Backtick: &#96;',
+-
+-          'Backslash: \\':
+-              'Backslash: &#x5C;',
+-        },
+-      });
+-    });
+-
+-    it('should unescape HTML', function () {
+-      test({
+-        sanitizer: 'unescape',
+-        expect: {
+-          '&lt;script&gt; alert(&quot;xss&amp;fun&quot;); &lt;&#x2F;script&gt;':
+-               '<script> alert("xss&fun"); </script>',
+-
+-          '&lt;script&gt; alert(&#x27;xss&amp;fun&#x27;); &lt;&#x2F;script&gt;':
+-              "<script> alert('xss&fun'); </script>",
+-
+-          'Backtick: &#96;':
+-              'Backtick: `',
+-        },
+-      });
+-    });
+-
+-    it('should remove control characters (<32 and 127)', function () {
+-      // Check basic functionality
+-      test({
+-        sanitizer: 'stripLow',
+-        expect: {
+-          'foo\x00': 'foo',
+-          '\x7Ffoo\x02': 'foo',
+-          '\x01\x09': '',
+-          'foo\x0A\x0D': 'foo',
+-        },
+-      });
+-      // Unicode safety
+-      test({
+-        sanitizer: 'stripLow',
+-        expect: {
+-          'perch\u00e9': 'perch\u00e9',
+-          '\u20ac': '\u20ac',
+-          '\u2206\x0A': '\u2206',
+-          '\ud83d\ude04': '\ud83d\ude04',
+-        },
+-      });
+-      // Preserve newlines
+-      test({
+-        sanitizer: 'stripLow',
+-        args: [true], // keep_new_lines
+-        expect: {
+-          'foo\x0A\x0D': 'foo\x0A\x0D',
+-          '\x03foo\x0A\x0D': 'foo\x0A\x0D',
+-        },
+-      });
+-    });
+-
+-    it('should sanitize a string based on a whitelist', function () {
+-      test({
+-        sanitizer: 'whitelist',
+-        args: ['abc'],
+-        expect: {
+-          'abcdef': 'abc',
+-          'aaaaaaaaaabbbbbbbbbb': 'aaaaaaaaaabbbbbbbbbb',
+-          'a1b2c3': 'abc',
+-          '   ': '',
+-        },
+-      });
+-    });
+-
+-    it('should sanitize a string based on a blacklist', function () {
+-      test({
+-        sanitizer: 'blacklist',
+-        args: ['abc'],
+-        expect: {
+-          'abcdef': 'def',
+-          'aaaaaaaaaabbbbbbbbbb': '',
+-          'a1b2c3': '123',
+-          '   ': '   ',
+-        },
+-      });
+-    });
+-
+-    it('should normalize an email based on domain', function () {
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        expect: {
+-          'test@me.com': 'test@me.com',
+-          'some.name@gmail.com': 'somename@gmail.com',
+-          'some.name@googleMail.com': 'somename@gmail.com',
+-          'some.name+extension@gmail.com': 'somename@gmail.com',
+-          'some.Name+extension@GoogleMail.com': 'somename@gmail.com',
+-          'some.name.middleName+extension@gmail.com': 'somenamemiddlename@gmail.com',
+-          'some.name.middleName+extension@GoogleMail.com': 'somenamemiddlename@gmail.com',
+-          'some.name.midd.leNa.me.+extension@gmail.com': 'somenamemiddlename@gmail.com',
+-          'some.name.midd.leNa.me.+extension@GoogleMail.com': 'somenamemiddlename@gmail.com',
+-          'some.name+extension@unknown.com': 'some.name+extension@unknown.com',
+-          'hans@m端ller.com': 'hans@m端ller.com',
+-          'an invalid email address': false,
+-          '': false,
+-          '+extension@gmail.com': false,
+-          '...@gmail.com': false,
+-          '.+extension@googlemail.com': false,
+-          '+a@icloud.com': false,
+-          '+a@outlook.com': false,
+-          '-a@yahoo.com': false,
+-          'some.name.midd..leNa...me...+extension@GoogleMail.com': 'somenamemiddlename@gmail.com',
+-          '"foo@bar"@baz.com': '"foo@bar"@baz.com',
+-        },
+-      });
+-
+-      // Testing all_lowercase switch, should apply to domains not known to be case-insensitive
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{ all_lowercase: false }],
+-        expect: {
+-          'test@foo.com': 'test@foo.com',
+-          'hans@m端ller.com': 'hans@m端ller.com',
+-          'test@FOO.COM': 'test@foo.com', // Hostname is always lowercased
+-          'blAH@x.com': 'blAH@x.com',
+-          // In case of domains that are known to be case-insensitive, there's a separate switch
+-          'TEST@me.com': 'test@me.com',
+-          'TEST@ME.COM': 'test@me.com',
+-          'SOME.name@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name.middleName+extension@GoogleMail.com': 'somenamemiddlename@gmail.com',
+-          'SOME.name.midd.leNa.me.+extension@gmail.com': 'somenamemiddlename@gmail.com',
+-          'SOME.name@gmail.com': 'somename@gmail.com',
+-          'SOME.name@yahoo.ca': 'some.name@yahoo.ca',
+-          'SOME.name@outlook.ie': 'some.name@outlook.ie',
+-          'SOME.name@me.com': 'some.name@me.com',
+-        },
+-      });
+-
+-      // Testing *_lowercase
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          all_lowercase: false,
+-          gmail_lowercase: false,
+-          icloud_lowercase: false,
+-          outlookdotcom_lowercase: false,
+-          yahoo_lowercase: false,
+-        }],
+-        expect: {
+-          'TEST@FOO.COM': 'TEST@foo.com', // all_lowercase
+-          'ME@gMAil.com': 'ME@gmail.com', // gmail_lowercase
+-          'ME@me.COM': 'ME@me.com', // icloud_lowercase
+-          'ME@icloud.COM': 'ME@icloud.com', // icloud_lowercase
+-          'ME@outlook.COM': 'ME@outlook.com', // outlookdotcom_lowercase
+-          'JOHN@live.CA': 'JOHN@live.ca', // outlookdotcom_lowercase
+-          'ME@ymail.COM': 'ME@ymail.com', // yahoo_lowercase
+-        },
+-      });
+-
+-      // Testing all_lowercase
+-      // Should overwrite all the *_lowercase options
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          all_lowercase: true,
+-          gmail_lowercase: false, // Overruled
+-          icloud_lowercase: false, // Overruled
+-          outlookdotcom_lowercase: false, // Overruled
+-          yahoo_lowercase: false, // Overruled
+-        }],
+-        expect: {
+-          'TEST@FOO.COM': 'test@foo.com', // all_lowercase
+-          'ME@gMAil.com': 'me@gmail.com', // gmail_lowercase
+-          'ME@me.COM': 'me@me.com', // icloud_lowercase
+-          'ME@icloud.COM': 'me@icloud.com', // icloud_lowercase
+-          'ME@outlook.COM': 'me@outlook.com', // outlookdotcom_lowercase
+-          'JOHN@live.CA': 'john@live.ca', // outlookdotcom_lowercase
+-          'ME@ymail.COM': 'me@ymail.com', // yahoo_lowercase
+-        },
+-      });
+-
+-      // Testing *_remove_dots
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_remove_dots: false,
+-        }],
+-        expect: {
+-          'SOME.name@GMAIL.com': 'some.name@gmail.com',
+-          'SOME.name+me@GMAIL.com': 'some.name@gmail.com',
+-          'my.self@foo.com': 'my.self@foo.com',
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_remove_dots: true,
+-        }],
+-        expect: {
+-          'SOME.name@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name+me@GMAIL.com': 'somename@gmail.com',
+-          'my.self@foo.com': 'my.self@foo.com',
+-        },
+-      });
+-
+-      // Testing *_remove_subaddress
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_remove_subaddress: false,
+-          icloud_remove_subaddress: false,
+-          outlookdotcom_remove_subaddress: false,
+-          yahoo_remove_subaddress: false, // Note Yahoo uses "-"
+-        }],
+-        expect: {
+-          'foo+bar@unknown.com': 'foo+bar@unknown.com',
+-          'foo+bar@gmail.com': 'foo+bar@gmail.com', // gmail_remove_subaddress
+-          'foo+bar@me.com': 'foo+bar@me.com', // icloud_remove_subaddress
+-          'foo+bar@icloud.com': 'foo+bar@icloud.com', // icloud_remove_subaddress
+-          'foo+bar@live.fr': 'foo+bar@live.fr', // outlookdotcom_remove_subaddress
+-          'foo+bar@hotmail.co.uk': 'foo+bar@hotmail.co.uk', // outlookdotcom_remove_subaddress
+-          'foo-bar@yahoo.com': 'foo-bar@yahoo.com', // yahoo_remove_subaddress
+-          'foo+bar@yahoo.com': 'foo+bar@yahoo.com', // yahoo_remove_subaddress
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_remove_subaddress: true,
+-          icloud_remove_subaddress: true,
+-          outlookdotcom_remove_subaddress: true,
+-          yahoo_remove_subaddress: true, // Note Yahoo uses "-"
+-        }],
+-        expect: {
+-          'foo+bar@unknown.com': 'foo+bar@unknown.com',
+-          'foo+bar@gmail.com': 'foo@gmail.com', // gmail_remove_subaddress
+-          'foo+bar@me.com': 'foo@me.com', // icloud_remove_subaddress
+-          'foo+bar@icloud.com': 'foo@icloud.com', // icloud_remove_subaddress
+-          'foo+bar@live.fr': 'foo@live.fr', // outlookdotcom_remove_subaddress
+-          'foo+bar@hotmail.co.uk': 'foo@hotmail.co.uk', // outlookdotcom_remove_subaddress
+-          'foo-bar@yahoo.com': 'foo@yahoo.com', // yahoo_remove_subaddress
+-          'foo+bar@yahoo.com': 'foo+bar@yahoo.com', // yahoo_remove_subaddress
+-        },
+-      });
+-
+-      // Testing gmail_convert_googlemaildotcom
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_convert_googlemaildotcom: false,
+-        }],
+-        expect: {
+-          'SOME.name@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name+me@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name+me@googlemail.com': 'somename@googlemail.com',
+-          'SOME.name+me@googlemail.COM': 'somename@googlemail.com',
+-          'SOME.name+me@googlEmail.com': 'somename@googlemail.com',
+-          'my.self@foo.com': 'my.self@foo.com',
+-        },
+-      });
+-
+-      test({
+-        sanitizer: 'normalizeEmail',
+-        args: [{
+-          gmail_convert_googlemaildotcom: true,
+-        }],
+-        expect: {
+-          'SOME.name@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name+me@GMAIL.com': 'somename@gmail.com',
+-          'SOME.name+me@googlemail.com': 'somename@gmail.com',
+-          'SOME.name+me@googlemail.COM': 'somename@gmail.com',
+-          'SOME.name+me@googlEmail.com': 'somename@gmail.com',
+-          'my.self@foo.com': 'my.self@foo.com',
+-        },
+-      });
+-    });
+-  });
+-}
+diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js b/devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js
++++ /dev/null
+@@ -1,3763 +0,0 @@
+-/* -*- Mode: js; tab-width: 2; indent-tabs-mode: nil; js-indent-level: 2; fill-column: 80 -*- */
+-/*
+- * Copyright 2013 Mozilla Foundation and contributors
+- * Licensed under the New BSD license. See LICENSE.md or:
+- * http://opensource.org/licenses/BSD-2-Clause
+- */
+-
+- "use strict";
+-
+-var assert = require('devtools/client/shared/vendor/stringvalidator/util/assert').assert;
+-
+-function test(options) {
+-  var args = options.args || [];
+-  args.unshift(null);
+-  if (options.valid) {
+-    options.valid.forEach(function (valid) {
+-      args[0] = valid;
+-
+-      let argsString = args.join(', ');
+-      ok(validator[options.validator](...args), `validator.${options.validator}(${argsString}) == true`);
+-    });
+-  }
+-  if (options.invalid) {
+-    options.invalid.forEach(function (invalid) {
+-      args[0] = invalid;
+-
+-      let argsString = args.join(', ');
+-      ok(!validator[options.validator](...args), `validator.${options.validator}(${argsString}) == false`);
+-    });
+-  }
+-}
+-
+-function repeat(str, count) {
+-  var result = '';
+-  while (count--) {
+-    result += str;
+-  }
+-  return result;
+-}
+-
+-function random4digit() {
+-  return Math.floor(1000 + (Math.random() * 9000));
+-}
+-
+-function run_test() {
+-  describe('Validators', function () {
+-    it('should validate email addresses', function () {
+-      test({
+-        validator: 'isEmail',
+-        valid: [
+-          'foo@bar.com',
+-          'x@x.au',
+-          'foo@bar.com.au',
+-          'foo+bar@bar.com',
+-          'hans.m端ller@test.com',
+-          'hans@m端ller.com',
+-          'test|123@m端ller.com',
+-          'test+ext@gmail.com',
+-          'some.name.midd.leNa.me.+extension@GoogleMail.com',
+-          'gmail...ignores...dots...@gmail.com',
+-          '"foobar"@example.com',
+-          '"  foo  m端ller "@example.com',
+-          '"foo\\@bar"@example.com',
+-          `${repeat('a', 64)}@${repeat('a', 252)}.com`,
+-        ],
+-        invalid: [
+-          'invalidemail@',
+-          'invalid.com',
+-          '@invalid.com',
+-          'foo@bar.com.',
+-          'somename@ｇｍａｉｌ.com',
+-          'foo@bar.co.uk.',
+-          'z@co.c',
+-          'ｇｍａｉｌｇｍａｉｌｇｍａｉｌｇｍａｉｌｇｍａｉｌ@gmail.com',
+-          `${repeat('a', 64)}@${repeat('a', 253)}.com`,
+-          `${repeat('a', 65)}@${repeat('a', 252)}.com`,
+-        ],
+-      });
+-    });
+-
+-    it('should validate email addresses without UTF8 characters in local part', function () {
+-      test({
+-        validator: 'isEmail',
+-        args: [{ allow_utf8_local_part: false }],
+-        valid: [
+-          'foo@bar.com',
+-          'x@x.au',
+-          'foo@bar.com.au',
+-          'foo+bar@bar.com',
+-          'hans@m端ller.com',
+-          'test|123@m端ller.com',
+-          'test+ext@gmail.com',
+-          'some.name.midd.leNa.me.+extension@GoogleMail.com',
+-          '"foobar"@example.com',
+-          '"foo\\@bar"@example.com',
+-          '"  foo  bar  "@example.com',
+-        ],
+-        invalid: [
+-          'invalidemail@',
+-          'invalid.com',
+-          '@invalid.com',
+-          'foo@bar.com.',
+-          'foo@bar.co.uk.',
+-          'somename@ｇｍａｉｌ.com',
+-          'hans.m端ller@test.com',
+-          'z@co.c',
+-        ],
+-      });
+-    });
+-
+-    it('should validate email addresses with display names', function () {
+-      test({
+-        validator: 'isEmail',
+-        args: [{ allow_display_name: true }],
+-        valid: [
+-          'foo@bar.com',
+-          'x@x.au',
+-          'foo@bar.com.au',
+-          'foo+bar@bar.com',
+-          'hans.m端ller@test.com',
+-          'hans@m端ller.com',
+-          'test|123@m端ller.com',
+-          'test+ext@gmail.com',
+-          'some.name.midd.leNa.me.+extension@GoogleMail.com',
+-          'Some Name <foo@bar.com>',
+-          'Some Name <x@x.au>',
+-          'Some Name <foo@bar.com.au>',
+-          'Some Name <foo+bar@bar.com>',
+-          'Some Name <hans.m端ller@test.com>',
+-          'Some Name <hans@m端ller.com>',
+-          'Some Name <test|123@m端ller.com>',
+-          'Some Name <test+ext@gmail.com>',
+-          'Some Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Some Middle Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Name<some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-        ],
+-        invalid: [
+-          'invalidemail@',
+-          'invalid.com',
+-          '@invalid.com',
+-          'foo@bar.com.',
+-          'foo@bar.co.uk.',
+-          'Some Name <invalidemail@>',
+-          'Some Name <invalid.com>',
+-          'Some Name <@invalid.com>',
+-          'Some Name <foo@bar.com.>',
+-          'Some Name <foo@bar.co.uk.>',
+-          'Some Name foo@bar.co.uk.>',
+-          'Some Name <foo@bar.co.uk.',
+-          'Some Name < foo@bar.co.uk >',
+-          'Name foo@bar.co.uk',
+-        ],
+-      });
+-    });
+-
+-    it('should validate email addresses with required display names', function () {
+-      test({
+-        validator: 'isEmail',
+-        args: [{ require_display_name: true }],
+-        valid: [
+-          'Some Name <foo@bar.com>',
+-          'Some Name <x@x.au>',
+-          'Some Name <foo@bar.com.au>',
+-          'Some Name <foo+bar@bar.com>',
+-          'Some Name <hans.m端ller@test.com>',
+-          'Some Name <hans@m端ller.com>',
+-          'Some Name <test|123@m端ller.com>',
+-          'Some Name <test+ext@gmail.com>',
+-          'Some Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Some Middle Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Name <some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-          'Name<some.name.midd.leNa.me.+extension@GoogleMail.com>',
+-        ],
+-        invalid: [
+-          'some.name.midd.leNa.me.+extension@GoogleMail.com',
+-          'foo@bar.com',
+-          'x@x.au',
+-          'foo@bar.com.au',
+-          'foo+bar@bar.com',
+-          'hans.m端ller@test.com',
+-          'hans@m端ller.com',
+-          'test|123@m端ller.com',
+-          'test+ext@gmail.com',
+-          'invalidemail@',
+-          'invalid.com',
+-          '@invalid.com',
+-          'foo@bar.com.',
+-          'foo@bar.co.uk.',
+-          'Some Name <invalidemail@>',
+-          'Some Name <invalid.com>',
+-          'Some Name <@invalid.com>',
+-          'Some Name <foo@bar.com.>',
+-          'Some Name <foo@bar.co.uk.>',
+-          'Some Name foo@bar.co.uk.>',
+-          'Some Name <foo@bar.co.uk.',
+-          'Some Name < foo@bar.co.uk >',
+-          'Name foo@bar.co.uk',
+-        ],
+-      });
+-    });
+-
+-
+-    it('should validate URLs', function () {
+-      test({
+-        validator: 'isURL',
+-        valid: [
+-          'foobar.com',
+-          'www.foobar.com',
+-          'foobar.com/',
+-          'valid.au',
+-          'http://www.foobar.com/',
+-          'http://www.foobar.com:23/',
+-          'http://www.foobar.com:65535/',
+-          'http://www.foobar.com:5/',
+-          'https://www.foobar.com/',
+-          'ftp://www.foobar.com/',
+-          'http://www.foobar.com/~foobar',
+-          'http://user:pass@www.foobar.com/',
+-          'http://user:@www.foobar.com/',
+-          'http://127.0.0.1/',
+-          'http://10.0.0.0/',
+-          'http://189.123.14.13/',
+-          'http://duckduckgo.com/?q=%2F',
+-          'http://foobar.com/t$-_.+!*\'(),',
+-          'http://localhost:3000/',
+-          'http://foobar.com/?foo=bar#baz=qux',
+-          'http://foobar.com?foo=bar',
+-          'http://foobar.com#baz=qux',
+-          'http://www.xn--froschgrn-x9a.net/',
+-          'http://xn--froschgrn-x9a.com/',
+-          'http://foo--bar.com',
+-          'http://høyfjellet.no',
+-          'http://xn--j1aac5a4g.xn--j1amh',
+-          'http://xn------eddceddeftq7bvv7c4ke4c.xn--p1ai',
+-          'http://кулік.укр',
+-          'test.com?ref=http://test2.com',
+-          'http://[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:80/index.html',
+-          'http://[1080:0:0:0:8:800:200C:417A]/index.html',
+-          'http://[3ffe:2a00:100:7031::1]',
+-          'http://[1080::8:800:200C:417A]/foo',
+-          'http://[::192.9.5.5]/ipng',
+-          'http://[::FFFF:129.144.52.38]:80/index.html',
+-          'http://[2010:836B:4179::836B:4179]',
+-        ],
+-        invalid: [
+-          'xyz://foobar.com',
+-          'invalid/',
+-          'invalid.x',
+-          'invalid.',
+-          '.com',
+-          'http://com/',
+-          'http://',
+-          'http://300.0.0.1/',
+-          'mailto:foo@bar.com',
+-          'rtmp://foobar.com',
+-          'http://www.xn--.com/',
+-          'http://xn--.com/',
+-          'http://www.foobar.com:0/',
+-          'http://www.foobar.com:70000/',
+-          'http://www.foobar.com:99999/',
+-          'http://www.-foobar.com/',
+-          'http://www.foobar-.com/',
+-          'http://foobar/# lol',
+-          'http://foobar/? lol',
+-          'http://foobar/ lol/',
+-          'http://lol @foobar.com/',
+-          'http://lol:lol @foobar.com/',
+-          'http://lol:lol:lol@foobar.com/',
+-          'http://lol: @foobar.com/',
+-          'http://www.foo_bar.com/',
+-          'http://www.foobar.com/\t',
+-          'http://\n@www.foobar.com/',
+-          '',
+-          `http://foobar.com/${new Array(2083).join('f')}`,
+-          'http://*.foo.com',
+-          '*.foo.com',
+-          '!.foo.com',
+-          'http://example.com.',
+-          'http://localhost:61500this is an invalid url!!!!',
+-          '////foobar.com',
+-          'http:////foobar.com',
+-          'https://',
+-          'https://example.com/foo/<script>alert(\'XSS\')</script>/',
+-        ],
+-      });
+-    });
+-
+-    it('should validate URLs with custom protocols', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          protocols: ['rtmp'],
+-        }],
+-        valid: [
+-          'rtmp://foobar.com',
+-        ],
+-        invalid: [
+-          'http://foobar.com',
+-        ],
+-      });
+-    });
+-
+-    it('should validate file URLs without a host', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          protocols: ['file'],
+-          require_host: false,
+-        }],
+-        valid: [
+-          'file://localhost/foo.txt',
+-          'file:///foo.txt',
+-          'file:///',
+-        ],
+-        invalid: [
+-          'http://foobar.com',
+-        ],
+-      });
+-    });
+-
+-    it('should validate URLs with any protocol', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          require_valid_protocol: false,
+-        }],
+-        valid: [
+-          'rtmp://foobar.com',
+-          'http://foobar.com',
+-          'test://foobar.com',
+-        ],
+-        invalid: [
+-          'mailto:test@example.com',
+-        ],
+-      });
+-    });
+-
+-    it('should validate URLs with underscores', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          allow_underscores: true,
+-        }],
+-        valid: [
+-          'http://foo_bar.com',
+-          'http://pr.example_com.294.example.com/',
+-          'http://foo__bar.com',
+-        ],
+-        invalid: [],
+-      });
+-    });
+-
+-    it('should validate URLs that do not have a TLD', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          require_tld: false,
+-        }],
+-        valid: [
+-          'http://foobar.com/',
+-          'http://foobar/',
+-          'foobar/',
+-          'foobar',
+-        ],
+-        invalid: [],
+-      });
+-    });
+-
+-    it('should validate URLs with a trailing dot option', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          allow_trailing_dot: true,
+-          require_tld: false,
+-        }],
+-        valid: [
+-          'http://example.com.',
+-          'foobar.',
+-        ],
+-      });
+-    });
+-
+-    it('should validate protocol relative URLs', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          allow_protocol_relative_urls: true,
+-        }],
+-        valid: [
+-          '//foobar.com',
+-          'http://foobar.com',
+-          'foobar.com',
+-        ],
+-        invalid: [
+-          '://foobar.com',
+-          '/foobar.com',
+-          '////foobar.com',
+-          'http:////foobar.com',
+-        ],
+-      });
+-    });
+-
+-    it('should not validate protocol relative URLs when require protocol is true', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          allow_protocol_relative_urls: true,
+-          require_protocol: true,
+-        }],
+-        valid: [
+-          'http://foobar.com',
+-        ],
+-        invalid: [
+-          '//foobar.com',
+-          '://foobar.com',
+-          '/foobar.com',
+-          'foobar.com',
+-        ],
+-      });
+-    });
+-
+-    it('should let users specify whether URLs require a protocol', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          require_protocol: true,
+-        }],
+-        valid: [
+-          'http://foobar.com/',
+-          'http://localhost/',
+-        ],
+-        invalid: [
+-          'foobar.com',
+-          'foobar',
+-        ],
+-      });
+-    });
+-
+-    it('should let users specify a host whitelist', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          host_whitelist: ['foo.com', 'bar.com'],
+-        }],
+-        valid: [
+-          'http://bar.com/',
+-          'http://foo.com/',
+-        ],
+-        invalid: [
+-          'http://foobar.com',
+-          'http://foo.bar.com/',
+-          'http://qux.com',
+-        ],
+-      });
+-    });
+-
+-    it('should allow regular expressions in the host whitelist', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          host_whitelist: ['bar.com', 'foo.com', /\.foo\.com$/],
+-        }],
+-        valid: [
+-          'http://bar.com/',
+-          'http://foo.com/',
+-          'http://images.foo.com/',
+-          'http://cdn.foo.com/',
+-          'http://a.b.c.foo.com/',
+-        ],
+-        invalid: [
+-          'http://foobar.com',
+-          'http://foo.bar.com/',
+-          'http://qux.com',
+-        ],
+-      });
+-    });
+-
+-    it('should let users specify a host blacklist', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          host_blacklist: ['foo.com', 'bar.com'],
+-        }],
+-        valid: [
+-          'http://foobar.com',
+-          'http://foo.bar.com/',
+-          'http://qux.com',
+-        ],
+-        invalid: [
+-          'http://bar.com/',
+-          'http://foo.com/',
+-        ],
+-      });
+-    });
+-
+-    it('should allow regular expressions in the host blacklist', function () {
+-      test({
+-        validator: 'isURL',
+-        args: [{
+-          host_blacklist: ['bar.com', 'foo.com', /\.foo\.com$/],
+-        }],
+-        valid: [
+-          'http://foobar.com',
+-          'http://foo.bar.com/',
+-          'http://qux.com',
+-        ],
+-        invalid: [
+-          'http://bar.com/',
+-          'http://foo.com/',
+-          'http://images.foo.com/',
+-          'http://cdn.foo.com/',
+-          'http://a.b.c.foo.com/',
+-        ],
+-      });
+-    });
+-
+-    it('should validate MAC addresses', function () {
+-      test({
+-        validator: 'isMACAddress',
+-        valid: [
+-          'ab:ab:ab:ab:ab:ab',
+-          'FF:FF:FF:FF:FF:FF',
+-          '01:02:03:04:05:ab',
+-          '01:AB:03:04:05:06',
+-        ],
+-        invalid: [
+-          'abc',
+-          '01:02:03:04:05',
+-          '01:02:03:04::ab',
+-          '1:2:3:4:5:6',
+-          'AB:CD:EF:GH:01:02',
+-        ],
+-      });
+-    });
+-
+-    it('should validate IP addresses', function () {
+-      test({
+-        validator: 'isIP',
+-        valid: [
+-          '127.0.0.1',
+-          '0.0.0.0',
+-          '255.255.255.255',
+-          '1.2.3.4',
+-          '::1',
+-          '2001:db8:0000:1:1:1:1:1',
+-          '2001:41d0:2:a141::1',
+-          '::ffff:127.0.0.1',
+-          '::0000',
+-          '0000::',
+-          '1::',
+-          '1111:1:1:1:1:1:1:1',
+-          'fe80::a6db:30ff:fe98:e946',
+-          '::',
+-          '::ffff:127.0.0.1',
+-          '0:0:0:0:0:ffff:127.0.0.1',
+-        ],
+-        invalid: [
+-          'abc',
+-          '256.0.0.0',
+-          '0.0.0.256',
+-          '26.0.0.256',
+-          '0200.200.200.200',
+-          '200.0200.200.200',
+-          '200.200.0200.200',
+-          '200.200.200.0200',
+-          '::banana',
+-          'banana::',
+-          '::1banana',
+-          '::1::',
+-          '1:',
+-          ':1',
+-          ':1:1:1::2',
+-          '1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1',
+-          '::11111',
+-          '11111:1:1:1:1:1:1:1',
+-          '2001:db8:0000:1:1:1:1::1',
+-          '0:0:0:0:0:0:ffff:127.0.0.1',
+-          '0:0:0:0:ffff:127.0.0.1',
+-        ],
+-      });
+-      test({
+-        validator: 'isIP',
+-        args: [4],
+-        valid: [
+-          '127.0.0.1',
+-          '0.0.0.0',
+-          '255.255.255.255',
+-          '1.2.3.4',
+-        ],
+-        invalid: [
+-          '::1',
+-          '2001:db8:0000:1:1:1:1:1',
+-          '::ffff:127.0.0.1',
+-        ],
+-      });
+-      test({
+-        validator: 'isIP',
+-        args: [6],
+-        valid: [
+-          '::1',
+-          '2001:db8:0000:1:1:1:1:1',
+-          '::ffff:127.0.0.1',
+-        ],
+-        invalid: [
+-          '127.0.0.1',
+-          '0.0.0.0',
+-          '255.255.255.255',
+-          '1.2.3.4',
+-          '::ffff:287.0.0.1',
+-        ],
+-      });
+-      test({
+-        validator: 'isIP',
+-        args: [10],
+-        valid: [],
+-        invalid: [
+-          '127.0.0.1',
+-          '0.0.0.0',
+-          '255.255.255.255',
+-          '1.2.3.4',
+-          '::1',
+-          '2001:db8:0000:1:1:1:1:1',
+-        ],
+-      });
+-    });
+-
+-    it('should validate FQDN', function () {
+-      test({
+-        validator: 'isFQDN',
+-        valid: [
+-          'domain.com',
+-          'dom.plato',
+-          'a.domain.co',
+-          'foo--bar.com',
+-          'xn--froschgrn-x9a.com',
+-          'rebecca.blackfriday',
+-        ],
+-        invalid: [
+-          'abc',
+-          '256.0.0.0',
+-          '_.com',
+-          '*.some.com',
+-          's!ome.com',
+-          'domain.com/',
+-          '/more.com',
+-        ],
+-      });
+-    });
+-    it('should validate FQDN with trailing dot option', function () {
+-      test({
+-        validator: 'isFQDN',
+-        args: [
+-            { allow_trailing_dot: true },
+-        ],
+-        valid: [
+-          'example.com.',
+-        ],
+-      });
+-    });
+-
+-    it('should validate alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        valid: [
+-          'abc',
+-          'ABC',
+-          'FoObar',
+-        ],
+-        invalid: [
+-          'abc1',
+-          '  foo  ',
+-          '',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-          'Heiß',
+-        ],
+-      });
+-    });
+-
+-    it('should validate czech alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['cs-CZ'],
+-        valid: [
+-          'žluťoučký',
+-          'KŮŇ',
+-          'Pěl',
+-          'Ďábelské',
+-          'ódy',
+-        ],
+-        invalid: [
+-          'ábc1',
+-          '  fůj  ',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate german alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['de-DE'],
+-        valid: [
+-          'äbc',
+-          'ÄBC',
+-          'FöÖbär',
+-          'Heiß',
+-        ],
+-        invalid: [
+-          'äbc1',
+-          '  föö  ',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate hungarian alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['hu-HU'],
+-        valid: [
+-          'árvíztűrőtükörfúrógép',
+-          'ÁRVÍZTŰRŐTÜKÖRFÚRÓGÉP',
+-        ],
+-        invalid: [
+-          'äbc1',
+-          '  fäö  ',
+-          'Heiß',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate arabic alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['ar'],
+-        valid: [
+-          'أبت',
+-          'اَبِتَثّجً',
+-        ],
+-        invalid: [
+-          '١٢٣أبت',
+-          '١٢٣',
+-          'abc1',
+-          '  foo  ',
+-          '',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-          'Heiß',
+-        ],
+-      });
+-    });
+-
+-    it('should validate serbian cyrillic alpha strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['sr-RS'],
+-        valid: [
+-          'ШћжЂљЕ',
+-          'ЧПСТЋЏ',
+-        ],
+-        invalid: [
+-          'řiď ',
+-          'blé33!!',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate serbian latin alpha strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['sr-RS@latin'],
+-        valid: [
+-          'ŠAabčšđćž',
+-          'ŠATROĆčđš',
+-        ],
+-        invalid: [
+-          '12řiď ',
+-          'blé!!',
+-          'föö!2!',
+-        ],
+-      });
+-    });
+-
+-
+-    it('should validate defined arabic locales alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['ar-SY'],
+-        valid: [
+-          'أبت',
+-          'اَبِتَثّجً',
+-        ],
+-        invalid: [
+-          '١٢٣أبت',
+-          '١٢٣',
+-          'abc1',
+-          '  foo  ',
+-          '',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-          'Heiß',
+-        ],
+-      });
+-    });
+-
+-    it('should validate turkish alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['tr-TR'],
+-        valid: [
+-          'AİıÖöÇçŞşĞğÜüZ',
+-        ],
+-        invalid: [
+-          '0AİıÖöÇçŞşĞğÜüZ1',
+-          '  AİıÖöÇçŞşĞğÜüZ  ',
+-          'abc1',
+-          '  foo  ',
+-          '',
+-          'ÄBC',
+-          'Heiß',
+-        ],
+-      });
+-    });
+-
+-    it('should validate urkrainian alpha strings', function () {
+-      test({
+-        validator: 'isAlpha',
+-        args: ['uk-UA'],
+-        valid: [
+-          'АБВГҐДЕЄЖЗИIЇЙКЛМНОПРСТУФХЦШЩЬЮЯ',
+-        ],
+-        invalid: [
+-          '0AİıÖöÇçŞşĞğÜüZ1',
+-          '  AİıÖöÇçŞşĞğÜüZ  ',
+-          'abc1',
+-          '  foo  ',
+-          '',
+-          'ÄBC',
+-          'Heiß',
+-          'ЫыЪъЭэ',
+-        ],
+-      });
+-    });
+-
+-    it('should validate alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        valid: [
+-          'abc123',
+-          'ABC11',
+-        ],
+-        invalid: [
+-          'abc ',
+-          'foo!!',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-        ],
+-      });
+-    });
+-
+-    it('should validate defined english aliases', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['en-GB'],
+-        valid: [
+-          'abc123',
+-          'ABC11',
+-        ],
+-        invalid: [
+-          'abc ',
+-          'foo!!',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-        ],
+-      });
+-    });
+-
+-    it('should validate czech alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['cs-CZ'],
+-        valid: [
+-          'řiť123',
+-          'KŮŇ11',
+-        ],
+-        invalid: [
+-          'řiď ',
+-          'blé!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate german alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['de-DE'],
+-        valid: [
+-          'äbc123',
+-          'ÄBC11',
+-        ],
+-        invalid: [
+-          'äca ',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate hungarian alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['hu-HU'],
+-        valid: [
+-          '0árvíztűrőtükörfúrógép123',
+-          '0ÁRVÍZTŰRŐTÜKÖRFÚRÓGÉP123',
+-        ],
+-        invalid: [
+-          '1időúr!',
+-          'äbc1',
+-          '  fäö  ',
+-          'Heiß!',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate spanish alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['es-ES'],
+-        valid: [
+-          'ábcó123',
+-          'ÁBCÓ11',
+-        ],
+-        invalid: [
+-          'äca ',
+-          'abcß',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate arabic alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['ar'],
+-        valid: [
+-          'أبت123',
+-          'أبتَُِ١٢٣',
+-        ],
+-        invalid: [
+-          'äca ',
+-          'abcß',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate defined arabic aliases', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['ar-SY'],
+-        valid: [
+-          'أبت123',
+-          'أبتَُِ١٢٣',
+-        ],
+-        invalid: [
+-          'abc ',
+-          'foo!!',
+-          'ÄBC',
+-          'FÜübar',
+-          'Jön',
+-        ],
+-      });
+-    });
+-
+-    it('should validate serbian cyrillic alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['sr-RS'],
+-        valid: [
+-          'ШћжЂљЕ123',
+-          'ЧПСТ132ЋЏ',
+-        ],
+-        invalid: [
+-          'řiď ',
+-          'blé!!',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate serbian latin alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['sr-RS@latin'],
+-        valid: [
+-          'ŠAabčšđćž123',
+-          'ŠATRO11Ćčđš',
+-        ],
+-        invalid: [
+-          'řiď ',
+-          'blé!!',
+-          'föö!!',
+-        ],
+-      });
+-    });
+-
+-    it('should validate turkish alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['tr-TR'],
+-        valid: [
+-          'AİıÖöÇçŞşĞğÜüZ123',
+-        ],
+-        invalid: [
+-          'AİıÖöÇçŞşĞğÜüZ ',
+-          'foo!!',
+-          'ÄBC',
+-        ],
+-      });
+-    });
+-
+-    it('should validate urkrainian alphanumeric strings', function () {
+-      test({
+-        validator: 'isAlphanumeric',
+-        args: ['uk-UA'],
+-        valid: [
+-          'АБВГҐДЕЄЖЗИIЇЙКЛМНОПРСТУФХЦШЩЬЮЯ123',
+-        ],
+-        invalid: [
+-          'éeoc ',
+-          'foo!!',
+-          'ÄBC',
+-          'ЫыЪъЭэ',
+-        ],
+-      });
+-    });
+-
+-    it('should error on invalid locale', function () {
+-      try {
+-        validator.isAlphanumeric('abc123', 'in-INVALID');
+-        assert(false);
+-      } catch (err) {
+-        assert(true);
+-      }
+-    });
+-
+-    it('should validate numeric strings', function () {
+-      test({
+-        validator: 'isNumeric',
+-        valid: [
+-          '123',
+-          '00123',
+-          '-00123',
+-          '0',
+-          '-0',
+-          '+123',
+-        ],
+-        invalid: [
+-          '123.123',
+-          ' ',
+-          '.',
+-        ],
+-      });
+-    });
+-
+-    it('should validate RFC5646 strings', function () {
+-      test({
+-        validator: 'isRFC5646',
+-        valid: [
+-          'en-US',
+-          'en-US',
+-        ],
+-        invalid: [
+-          'enus',
+-          'en-us',
+-          'xxx',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate RGBColor strings', function () {
+-      test({
+-        validator: 'isRGBColor',
+-        valid: [
+-          "rgb(0,31,255)",
+-          "rgb(0,  31, 255)",
+-        ],
+-        invalid: [
+-          "",
+-          "rgb(1,349,275)",
+-          "rgb(01,31,255)",
+-          "rgb(0.6,31,255)",
+-          "rgba(0,31,255)",
+-        ],
+-      });
+-    });
+-
+-    it('should validate SemVer strings', function () {
+-      test({
+-        validator: 'isSemVer',
+-        valid: [
+-          "v1.0.0",
+-          "1.0.0",
+-          "1.0.0-alpha",
+-          "1.0.0-alpha.1",
+-          "1.0.0-0.3.7",
+-          "1.0.0-x.7.z.92",
+-          "1.0.0-alpha+001",
+-          "1.0.0+20130313144700",
+-          "1.0.0-beta+exp.sha.5114f85",
+-          "1.0.0-beta+exp.sha.05114f85",
+-        ],
+-        invalid: [
+-          "1.1.01",
+-          "1.01.0",
+-          "01.1.0",
+-          "v1.1.01",
+-          "v1.01.0",
+-          "v01.1.0",
+-          "1.0.0-0.03.7",
+-          "1.0.0-00.3.7",
+-          "1.0.0-+beta",
+-          "1.0.0-b+-9+eta",
+-          "v+1.8.0-b+-9+eta",
+-        ],
+-      });
+-    });
+-
+-    it('should validate decimal numbers', function () {
+-      test({
+-        validator: 'isDecimal',
+-        valid: [
+-          '123',
+-          '00123',
+-          '-00123',
+-          '0',
+-          '-0',
+-          '+123',
+-          '0.01',
+-          '.1',
+-          '1.0',
+-          '-.25',
+-          '-0',
+-          '0.0000000000001',
+-        ],
+-        invalid: [
+-          '....',
+-          ' ',
+-          '',
+-          '-',
+-          '+',
+-          '.',
+-          '0.1a',
+-          'a',
+-          '\n',
+-        ],
+-      });
+-    });
+-
+-    it('should validate lowercase strings', function () {
+-      test({
+-        validator: 'isLowercase',
+-        valid: [
+-          'abc',
+-          'abc123',
+-          'this is lowercase.',
+-          'tr竪s 端ber',
+-        ],
+-        invalid: [
+-          'fooBar',
+-          '123A',
+-        ],
+-      });
+-    });
+-
+-    it('should validate uppercase strings', function () {
+-      test({
+-        validator: 'isUppercase',
+-        valid: [
+-          'ABC',
+-          'ABC123',
+-          'ALL CAPS IS FUN.',
+-          '   .',
+-        ],
+-        invalid: [
+-          'fooBar',
+-          '123abc',
+-        ],
+-      });
+-    });
+-
+-    it('should validate integers', function () {
+-      test({
+-        validator: 'isInt',
+-        valid: [
+-          '13',
+-          '123',
+-          '0',
+-          '123',
+-          '-0',
+-          '+1',
+-          '01',
+-          '-01',
+-          '000',
+-        ],
+-        invalid: [
+-          '100e10',
+-          '123.123',
+-          '   ',
+-          '',
+-        ],
+-      });
+-      test({
+-        validator: 'isInt',
+-        args: [{ allow_leading_zeroes: false }],
+-        valid: [
+-          '13',
+-          '123',
+-          '0',
+-          '123',
+-          '-0',
+-          '+1',
+-        ],
+-        invalid: [
+-          '01',
+-          '-01',
+-          '000',
+-          '100e10',
+-          '123.123',
+-          '   ',
+-          '',
+-        ],
+-      });
+-      test({
+-        validator: 'isInt',
+-        args: [{ allow_leading_zeroes: true }],
+-        valid: [
+-          '13',
+-          '123',
+-          '0',
+-          '123',
+-          '-0',
+-          '+1',
+-          '01',
+-          '-01',
+-          '000',
+-          '-000',
+-          '+000',
+-        ],
+-        invalid: [
+-          '100e10',
+-          '123.123',
+-          '   ',
+-          '',
+-        ],
+-      });
+-      test({
+-        validator: 'isInt',
+-        args: [{
+-          min: 10,
+-        }],
+-        valid: [
+-          '15',
+-          '80',
+-          '99',
+-        ],
+-        invalid: [
+-          '9',
+-          '6',
+-          '3.2',
+-          'a',
+-        ],
+-      });
+-      test({
+-        validator: 'isInt',
+-        args: [{
+-          min: 10,
+-          max: 15,
+-        }],
+-        valid: [
+-          '15',
+-          '11',
+-          '13',
+-        ],
+-        invalid: [
+-          '9',
+-          '2',
+-          '17',
+-          '3.2',
+-          '33',
+-          'a',
+-        ],
+-      });
+-      test({
+-        validator: 'isInt',
+-        args: [{
+-          gt: 10,
+-          lt: 15,
+-        }],
+-        valid: [
+-          '14',
+-          '11',
+-          '13',
+-        ],
+-        invalid: [
+-          '10',
+-          '15',
+-          '17',
+-          '3.2',
+-          '33',
+-          'a',
+-        ],
+-      });
+-    });
+-
+-    it('should validate floats', function () {
+-      test({
+-        validator: 'isFloat',
+-        valid: [
+-          '123',
+-          '123.',
+-          '123.123',
+-          '-123.123',
+-          '-0.123',
+-          '+0.123',
+-          '0.123',
+-          '.0',
+-          '-.123',
+-          '+.123',
+-          '01.123',
+-          '-0.22250738585072011e-307',
+-        ],
+-        invalid: [
+-          '  ',
+-          '',
+-          '.',
+-          'foo',
+-        ],
+-      });
+-      test({
+-        validator: 'isFloat',
+-        args: [{
+-          min: 3.7,
+-        }],
+-        valid: [
+-          '3.888',
+-          '3.92',
+-          '4.5',
+-          '50',
+-          '3.7',
+-          '3.71',
+-        ],
+-        invalid: [
+-          '3.6',
+-          '3.69',
+-          '3',
+-          '1.5',
+-          'a',
+-        ],
+-      });
+-      test({
+-        validator: 'isFloat',
+-        args: [{
+-          min: 0.1,
+-          max: 1.0,
+-        }],
+-        valid: [
+-          '0.1',
+-          '1.0',
+-          '0.15',
+-          '0.33',
+-          '0.57',
+-          '0.7',
+-        ],
+-        invalid: [
+-          '0',
+-          '0.0',
+-          'a',
+-          '1.3',
+-          '0.05',
+-          '5',
+-        ],
+-      });
+-      test({
+-        validator: 'isFloat',
+-        args: [{
+-          gt: -5.5,
+-          lt: 10,
+-        }],
+-        valid: [
+-          '9.9',
+-          '1.0',
+-          '0',
+-          '-1',
+-          '7',
+-          '-5.4',
+-        ],
+-        invalid: [
+-          '10',
+-          '-5.5',
+-          'a',
+-          '-20.3',
+-          '20e3',
+-          '10.00001',
+-        ],
+-      });
+-      test({
+-        validator: 'isFloat',
+-        args: [{
+-          min: -5.5,
+-          max: 10,
+-          gt: -5.5,
+-          lt: 10,
+-        }],
+-        valid: [
+-          '9.99999',
+-          '-5.499999',
+-        ],
+-        invalid: [
+-          '10',
+-          '-5.5',
+-        ],
+-      });
+-    });
+-
+-    it('should validate hexadecimal strings', function () {
+-      test({
+-        validator: 'isHexadecimal',
+-        valid: [
+-          'deadBEEF',
+-          'ff0044',
+-        ],
+-        invalid: [
+-          'abcdefg',
+-          '',
+-          '..',
+-        ],
+-      });
+-    });
+-
+-    it('should validate hexadecimal color strings', function () {
+-      test({
+-        validator: 'isHexColor',
+-        valid: [
+-          '#ff0034',
+-          '#CCCCCC',
+-          'fff',
+-          '#f00',
+-        ],
+-        invalid: [
+-          '#ff',
+-          'fff0',
+-          '#ff12FG',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ISRC code strings', function () {
+-      test({
+-        validator: 'isISRC',
+-        valid: [
+-          'USAT29900609',
+-          'GBAYE6800011',
+-          'USRC15705223',
+-          'USCA29500702',
+-        ],
+-        invalid: [
+-          'USAT2990060',
+-          'SRC15705223',
+-          'US-CA29500702',
+-          'USARC15705223',
+-        ],
+-      });
+-    });
+-
+-    it('should validate md5 strings', function () {
+-      test({
+-        validator: 'isMD5',
+-        valid: [
+-          'd94f3f016ae679c3008de268209132f2',
+-          '751adbc511ccbe8edf23d486fa4581cd',
+-          '88dae00e614d8f24cfd5a8b3f8002e93',
+-          '0bf1c35032a71a14c2f719e5a14c1e96',
+-        ],
+-        invalid: [
+-          'KYT0bf1c35032a71a14c2f719e5a14c1',
+-          'q94375dj93458w34',
+-          '39485729348',
+-          '%&FHKJFvk',
+-        ],
+-      });
+-    });
+-
+-    it('should validate null strings', function () {
+-      test({
+-        validator: 'isEmpty',
+-        valid: [
+-          '',
+-        ],
+-        invalid: [
+-          ' ',
+-          'foo',
+-          '3',
+-        ],
+-      });
+-    });
+-
+-    it('should validate strings against an expected value', function () {
+-      test({ validator: 'equals', args: ['abc'], valid: ['abc'], invalid: ['Abc', '123'] });
+-    });
+-
+-    it('should validate strings contain another string', function () {
+-      test({
+-        validator: 'contains',
+-        args: ['foo'],
+-        valid: ['foo', 'foobar', 'bazfoo'],
+-        invalid: ['bar', 'fobar'],
+-      });
+-    });
+-
+-    it('should validate strings against a pattern', function () {
+-      test({
+-        validator: 'matches',
+-        args: [/abc/],
+-        valid: ['abc', 'abcdef', '123abc'],
+-        invalid: ['acb', 'Abc'],
+-      });
+-      test({
+-        validator: 'matches',
+-        args: ['abc'],
+-        valid: ['abc', 'abcdef', '123abc'],
+-        invalid: ['acb', 'Abc'],
+-      });
+-      test({
+-        validator: 'matches',
+-        args: ['abc', 'i'],
+-        valid: ['abc', 'abcdef', '123abc', 'AbC'],
+-        invalid: ['acb'],
+-      });
+-    });
+-
+-    it('should validate strings by length (deprecated api)', function () {
+-      test({
+-        validator: 'isLength',
+-        args: [2],
+-        valid: ['abc', 'de', 'abcd'],
+-        invalid: ['', 'a'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [2, 3],
+-        valid: ['abc', 'de'],
+-        invalid: ['', 'a', 'abcd'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [2, 3],
+-        valid: ['干𩸽', '𠮷野家'],
+-        invalid: ['', '𠀋', '千竈通り'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [0, 0],
+-        valid: [''],
+-        invalid: ['a', 'ab'],
+-      });
+-    });
+-
+-    it('should validate strings by byte length (deprecated api)', function () {
+-      test({
+-        validator: 'isByteLength',
+-        args: [2],
+-        valid: ['abc', 'de', 'abcd', 'ｇｍａｉｌ'],
+-        invalid: ['', 'a'],
+-      });
+-      test({
+-        validator: 'isByteLength',
+-        args: [2, 3],
+-        valid: ['abc', 'de', 'ｇ'],
+-        invalid: ['', 'a', 'abcd', 'ｇｍ'],
+-      });
+-      test({
+-        validator: 'isByteLength',
+-        args: [0, 0],
+-        valid: [''],
+-        invalid: ['ｇ', 'a'],
+-      });
+-    });
+-
+-    it('should validate strings by length', function () {
+-      test({
+-        validator: 'isLength',
+-        args: [{ min: 2 }],
+-        valid: ['abc', 'de', 'abcd'],
+-        invalid: ['', 'a'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [{ min: 2, max: 3 }],
+-        valid: ['abc', 'de'],
+-        invalid: ['', 'a', 'abcd'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [{ min: 2, max: 3 }],
+-        valid: ['干𩸽', '𠮷野家'],
+-        invalid: ['', '𠀋', '千竈通り'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [{ max: 3 }],
+-        valid: ['abc', 'de', 'a', ''],
+-        invalid: ['abcd'],
+-      });
+-      test({
+-        validator: 'isLength',
+-        args: [{ max: 0 }],
+-        valid: [''],
+-        invalid: ['a', 'ab'],
+-      });
+-    });
+-
+-    it('should validate strings by byte length', function () {
+-      test({
+-        validator: 'isByteLength',
+-        args: [{ min: 2 }],
+-        valid: ['abc', 'de', 'abcd', 'ｇｍａｉｌ'],
+-        invalid: ['', 'a'],
+-      });
+-      test({
+-        validator: 'isByteLength',
+-        args: [{ min: 2, max: 3 }],
+-        valid: ['abc', 'de', 'ｇ'],
+-        invalid: ['', 'a', 'abcd', 'ｇｍ'],
+-      });
+-      test({
+-        validator: 'isByteLength',
+-        args: [{ max: 3 }],
+-        valid: ['abc', 'de', 'ｇ', 'a', ''],
+-        invalid: ['abcd', 'ｇｍ'],
+-      });
+-      test({
+-        validator: 'isByteLength',
+-        args: [{ max: 0 }],
+-        valid: [''],
+-        invalid: ['ｇ', 'a'],
+-      });
+-    });
+-
+-    it('should validate UUIDs', function () {
+-      test({
+-        validator: 'isUUID',
+-        valid: [
+-          'A987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-          'A987FBC9-4BED-4078-8F07-9141BA07C9F3',
+-          'A987FBC9-4BED-5078-AF07-9141BA07C9F3',
+-        ],
+-        invalid: [
+-          '',
+-          'xxxA987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-          'A987FBC9-4BED-3078-CF07-9141BA07C9F3xxx',
+-          'A987FBC94BED3078CF079141BA07C9F3',
+-          '934859',
+-          '987FBC9-4BED-3078-CF07A-9141BA07C9F3',
+-          'AAAAAAAA-1111-1111-AAAG-111111111111',
+-        ],
+-      });
+-      test({
+-        validator: 'isUUID',
+-        args: [3],
+-        valid: [
+-          'A987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-        ],
+-        invalid: [
+-          '',
+-          'xxxA987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-          '934859',
+-          'AAAAAAAA-1111-1111-AAAG-111111111111',
+-          'A987FBC9-4BED-4078-8F07-9141BA07C9F3',
+-          'A987FBC9-4BED-5078-AF07-9141BA07C9F3',
+-        ],
+-      });
+-      test({
+-        validator: 'isUUID',
+-        args: [4],
+-        valid: [
+-          '713ae7e3-cb32-45f9-adcb-7c4fa86b90c1',
+-          '625e63f3-58f5-40b7-83a1-a72ad31acffb',
+-          '57b73598-8764-4ad0-a76a-679bb6640eb1',
+-          '9c858901-8a57-4791-81fe-4c455b099bc9',
+-        ],
+-        invalid: [
+-          '',
+-          'xxxA987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-          '934859',
+-          'AAAAAAAA-1111-1111-AAAG-111111111111',
+-          'A987FBC9-4BED-5078-AF07-9141BA07C9F3',
+-          'A987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-        ],
+-      });
+-      test({
+-        validator: 'isUUID',
+-        args: [5],
+-        valid: [
+-          '987FBC97-4BED-5078-AF07-9141BA07C9F3',
+-          '987FBC97-4BED-5078-BF07-9141BA07C9F3',
+-          '987FBC97-4BED-5078-8F07-9141BA07C9F3',
+-          '987FBC97-4BED-5078-9F07-9141BA07C9F3',
+-        ],
+-        invalid: [
+-          '',
+-          'xxxA987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-          '934859',
+-          'AAAAAAAA-1111-1111-AAAG-111111111111',
+-          '9c858901-8a57-4791-81fe-4c455b099bc9',
+-          'A987FBC9-4BED-3078-CF07-9141BA07C9F3',
+-        ],
+-      });
+-    });
+-
+-    it('should validate a string that is in another string or array', function () {
+-      test({
+-        validator: 'isIn',
+-        args: ['foobar'],
+-        valid: ['foo', 'bar', 'foobar', ''],
+-        invalid: ['foobarbaz', 'barfoo'],
+-      });
+-      test({
+-        validator: 'isIn',
+-        args: [['foo', 'bar']],
+-        valid: ['foo', 'bar'],
+-        invalid: ['foobar', 'barfoo', ''],
+-      });
+-      test({
+-        validator: 'isIn',
+-        args: [['1', '2', '3']],
+-        valid: ['1', '2', '3'],
+-        invalid: ['4', ''],
+-      });
+-      test({ validator: 'isIn', invalid: ['foo', ''] });
+-    });
+-
+-    it('should validate a string that is in another object', function () {
+-      test({
+-        validator: 'isIn',
+-        args: [{ 'foo': 1, 'bar': 2, 'foobar': 3 }],
+-        valid: ['foo', 'bar', 'foobar'],
+-        invalid: ['foobarbaz', 'barfoo', ''],
+-      });
+-      test({
+-        validator: 'isIn',
+-        args: [{ 1: 3, 2: 0, 3: 1 }],
+-        valid: ['1', '2', '3'],
+-        invalid: ['4', ''],
+-      });
+-    });
+-
+-    it('should validate dates against a start date', function () {
+-      test({
+-        validator: 'isAfter',
+-        args: ['2011-08-03'],
+-        valid: ['2011-08-04', new Date(2011, 8, 10).toString()],
+-        invalid: ['2010-07-02', '2011-08-03', new Date(0).toString(), 'foo'],
+-      });
+-      test({
+-        validator: 'isAfter',
+-        valid: ['2100-08-04', new Date(Date.now() + 86400000).toString()],
+-        invalid: ['2010-07-02', new Date(0).toString()],
+-      });
+-      test({
+-        validator: 'isAfter',
+-        args: ['2011-08-03'],
+-        valid: ['2015-09-17'],
+-        invalid: ['invalid date'],
+-      });
+-      test({
+-        validator: 'isAfter',
+-        args: ['invalid date'],
+-        invalid: ['invalid date', '2015-09-17'],
+-      });
+-    });
+-
+-    it('should validate dates against an end date', function () {
+-      test({
+-        validator: 'isBefore',
+-        args: ['08/04/2011'],
+-        valid: ['2010-07-02', '2010-08-04', new Date(0).toString()],
+-        invalid: ['08/04/2011', new Date(2011, 9, 10).toString()],
+-      });
+-      test({
+-        validator: 'isBefore',
+-        args: [new Date(2011, 7, 4).toString()],
+-        valid: ['2010-07-02', '2010-08-04', new Date(0).toString()],
+-        invalid: ['08/04/2011', new Date(2011, 9, 10).toString()],
+-      });
+-      test({
+-        validator: 'isBefore',
+-        valid: [
+-          '2000-08-04',
+-          new Date(0).toString(),
+-          new Date(Date.now() - 86400000).toString(),
+-        ],
+-        invalid: ['2100-07-02', new Date(2097, 10, 10).toString()],
+-      });
+-      test({
+-        validator: 'isBefore',
+-        args: ['2011-08-03'],
+-        valid: ['1999-12-31'],
+-        invalid: ['invalid date'],
+-      });
+-      test({
+-        validator: 'isBefore',
+-        args: ['invalid date'],
+-        invalid: ['invalid date', '1999-12-31'],
+-      });
+-    });
+-
+-    it('should validate that integer strings are divisible by a number', function () {
+-      test({
+-        validator: 'isDivisibleBy',
+-        args: [2],
+-        valid: ['2', '4', '100', '1000'],
+-        invalid: [
+-          '1',
+-          '2.5',
+-          '101',
+-          'foo',
+-          '',
+-        ],
+-      });
+-    });
+-
+-    it('should validate credit cards', function () {
+-      test({
+-        validator: 'isCreditCard',
+-        valid: [
+-          '375556917985515',
+-          '36050234196908',
+-          '4716461583322103',
+-          '4716-2210-5188-5662',
+-          '4929 7226 5379 7141',
+-          '5398228707871527',
+-          '6283875070985593',
+-          '6263892624162870',
+-          '6234917882863855',
+-          '6234698580215388',
+-          '6226050967750613',
+-          '6246281879460688',
+-          '2222155765072228',
+-          '2225855203075256',
+-          '2720428011723762',
+-          '2718760626256570',
+-        ],
+-        invalid: [
+-          'foo',
+-          'foo',
+-          '5398228707871528',
+-          '2718760626256571',
+-          '2721465526338453',
+-          '2220175103860763',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ISINs', function () {
+-      test({
+-        validator: 'isISIN',
+-        valid: [
+-          'AU0000XVGZA3',
+-          'DE000BAY0017',
+-          'BE0003796134',
+-          'SG1G55870362',
+-          'GB0001411924',
+-          'DE000WCH8881',
+-          'PLLWBGD00016',
+-        ],
+-        invalid: [
+-          'DE000BAY0018',
+-          'PLLWBGD00019',
+-          'foo',
+-          '5398228707871528',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ISBNs', function () {
+-      test({
+-        validator: 'isISBN',
+-        args: [10],
+-        valid: [
+-          '3836221195', '3-8362-2119-5', '3 8362 2119 5',
+-          '1617290858', '1-61729-085-8', '1 61729 085-8',
+-          '0007269706', '0-00-726970-6', '0 00 726970 6',
+-          '3423214120', '3-423-21412-0', '3 423 21412 0',
+-          '340101319X', '3-401-01319-X', '3 401 01319 X',
+-        ],
+-        invalid: [
+-          '3423214121', '3-423-21412-1', '3 423 21412 1',
+-          '978-3836221191', '9783836221191',
+-          '123456789a', 'foo', '',
+-        ],
+-      });
+-      test({
+-        validator: 'isISBN',
+-        args: [13],
+-        valid: [
+-          '9783836221191', '978-3-8362-2119-1', '978 3 8362 2119 1',
+-          '9783401013190', '978-3401013190', '978 3401013190',
+-          '9784873113685', '978-4-87311-368-5', '978 4 87311 368 5',
+-        ],
+-        invalid: [
+-          '9783836221190', '978-3-8362-2119-0', '978 3 8362 2119 0',
+-          '3836221195', '3-8362-2119-5', '3 8362 2119 5',
+-          '01234567890ab', 'foo', '',
+-        ],
+-      });
+-      test({
+-        validator: 'isISBN',
+-        valid: [
+-          '340101319X',
+-          '9784873113685',
+-        ],
+-        invalid: [
+-          '3423214121',
+-          '9783836221190',
+-        ],
+-      });
+-      test({
+-        validator: 'isISBN',
+-        args: ['foo'],
+-        invalid: [
+-          '340101319X',
+-          '9784873113685',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ISSNs', function () {
+-      test({
+-        validator: 'isISSN',
+-        valid: [
+-          '0378-5955',
+-          '0000-0000',
+-          '2434-561X',
+-          '2434-561x',
+-          '01896016',
+-          '20905076',
+-        ],
+-        invalid: [
+-          '0378-5954',
+-          '0000-0001',
+-          '0378-123',
+-          '037-1234',
+-          '0',
+-          '2434-561c',
+-          '1684-5370',
+-          '19960791',
+-          '',
+-        ],
+-      });
+-      test({
+-        validator: 'isISSN',
+-        args: [{ case_sensitive: true }],
+-        valid: [
+-          '2434-561X',
+-          '2434561X',
+-          '0378-5955',
+-          '03785955',
+-        ],
+-        invalid: [
+-          '2434-561x',
+-          '2434561x',
+-        ],
+-      });
+-      test({
+-        validator: 'isISSN',
+-        args: [{ require_hyphen: true }],
+-        valid: [
+-          '2434-561X',
+-          '2434-561x',
+-          '0378-5955',
+-        ],
+-        invalid: [
+-          '2434561X',
+-          '2434561x',
+-          '03785955',
+-        ],
+-      });
+-      test({
+-        validator: 'isISSN',
+-        args: [{ case_sensitive: true, require_hyphen: true }],
+-        valid: [
+-          '2434-561X',
+-          '0378-5955',
+-        ],
+-        invalid: [
+-          '2434-561x',
+-          '2434561X',
+-          '2434561x',
+-          '03785955',
+-        ],
+-      });
+-    });
+-
+-    it('should validate JSON', function () {
+-      test({
+-        validator: 'isJSON',
+-        valid: [
+-          '{ "key": "value" }',
+-          '{}',
+-        ],
+-        invalid: [
+-          '{ key: "value" }',
+-          '{ \'key\': \'value\' }',
+-          'null',
+-          '1234',
+-          'false',
+-          '"nope"',
+-        ],
+-      });
+-    });
+-
+-    it('should validate multibyte strings', function () {
+-      test({
+-        validator: 'isMultibyte',
+-        valid: [
+-          'ひらがな・カタカナ、．漢字',
+-          'あいうえお foobar',
+-          'test＠example.com',
+-          '1234abcDEｘｙｚ',
+-          'ｶﾀｶﾅ',
+-          '中文',
+-        ],
+-        invalid: [
+-          'abc',
+-          'abc123',
+-          '<>@" *.',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ascii strings', function () {
+-      test({
+-        validator: 'isAscii',
+-        valid: [
+-          'foobar',
+-          '0987654321',
+-          'test@example.com',
+-          '1234abcDEF',
+-        ],
+-        invalid: [
+-          'ｆｏｏbar',
+-          'ｘｙｚ０９８',
+-          '１２３456',
+-          'ｶﾀｶﾅ',
+-        ],
+-      });
+-    });
+-
+-    it('should validate full-width strings', function () {
+-      test({
+-        validator: 'isFullWidth',
+-        valid: [
+-          'ひらがな・カタカナ、．漢字',
+-          '３ー０　ａ＠ｃｏｍ',
+-          'Ｆｶﾀｶﾅﾞﾬ',
+-          'Good＝Parts',
+-        ],
+-        invalid: [
+-          'abc',
+-          'abc123',
+-          '!"#$%&()<>/+=-_? ~^|.,@`{}[]',
+-        ],
+-      });
+-    });
+-
+-    it('should validate half-width strings', function () {
+-      test({
+-        validator: 'isHalfWidth',
+-        valid: [
+-          '!"#$%&()<>/+=-_? ~^|.,@`{}[]',
+-          'l-btn_02--active',
+-          'abc123い',
+-          'ｶﾀｶﾅﾞﾬ￩',
+-        ],
+-        invalid: [
+-          'あいうえお',
+-          '００１１',
+-        ],
+-      });
+-    });
+-
+-    it('should validate variable-width strings', function () {
+-      test({
+-        validator: 'isVariableWidth',
+-        valid: [
+-          'ひらがなカタカナ漢字ABCDE',
+-          '３ー０123',
+-          'Ｆｶﾀｶﾅﾞﾬ',
+-          'Good＝Parts',
+-        ],
+-        invalid: [
+-          'abc',
+-          'abc123',
+-          '!"#$%&()<>/+=-_? ~^|.,@`{}[]',
+-          'ひらがな・カタカナ、．漢字',
+-          '１２３４５６',
+-          'ｶﾀｶﾅﾞﾬ',
+-        ],
+-      });
+-    });
+-
+-    it('should validate surrogate pair strings', function () {
+-      test({
+-        validator: 'isSurrogatePair',
+-        valid: [
+-          '𠮷野𠮷',
+-          '𩸽',
+-          'ABC千𥧄1-2-3',
+-        ],
+-        invalid: [
+-          '吉野竈',
+-          '鮪',
+-          'ABC1-2-3',
+-        ],
+-      });
+-    });
+-
+-    it('should validate base64 strings', function () {
+-      test({
+-        validator: 'isBase64',
+-        valid: [
+-          'Zg==',
+-          'Zm8=',
+-          'Zm9v',
+-          'Zm9vYg==',
+-          'Zm9vYmE=',
+-          'Zm9vYmFy',
+-          'TG9yZW0gaXBzdW0gZG9sb3Igc2l0IGFtZXQsIGNvbnNlY3RldHVyIGFkaXBpc2NpbmcgZWxpdC4=',
+-          'Vml2YW11cyBmZXJtZW50dW0gc2VtcGVyIHBvcnRhLg==',
+-          'U3VzcGVuZGlzc2UgbGVjdHVzIGxlbw==',
+-          'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuMPNS1Ufof9EW/M98FNw' +
+-            'UAKrwflsqVxaxQjBQnHQmiI7Vac40t8x7pIb8gLGV6wL7sBTJiPovJ0V7y7oc0Ye' +
+-            'rhKh0Rm4skP2z/jHwwZICgGzBvA0rH8xlhUiTvcwDCJ0kc+fh35hNt8srZQM4619' +
+-            'FTgB66Xmp4EtVyhpQV+t02g6NzK72oZI0vnAvqhpkxLeLiMCyrI416wHm5Tkukhx' +
+-            'QmcL2a6hNOyu0ixX/x2kSFXApEnVrJ+/IxGyfyw8kf4N2IZpW5nEP847lpfj0SZZ' +
+-            'Fwrd1mnfnDbYohX2zRptLy2ZUn06Qo9pkG5ntvFEPo9bfZeULtjYzIl6K8gJ2uGZ' +
+-            'HQIDAQAB',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          'Zg=',
+-          'Z===',
+-          'Zm=8',
+-          '=m9vYg==',
+-          'Zm9vYmFy====',
+-        ],
+-      });
+-    });
+-
+-    it('should validate hex-encoded MongoDB ObjectId', function () {
+-      test({
+-        validator: 'isMongoId',
+-        valid: [
+-          '507f1f77bcf86cd799439011',
+-        ],
+-        invalid: [
+-          '507f1f77bcf86cd7994390',
+-          '507f1f77bcf86cd79943901z',
+-          '',
+-          '507f1f77bcf86cd799439011 ',
+-        ],
+-      });
+-    });
+-
+-    it('should validate mobile phone number', function () {
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0944549710',
+-          '+963944549710',
+-          '956654379',
+-          '0944549710',
+-          '0962655597',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          '+9639626626262',
+-          '+963332210972',
+-          '0114152198',
+-        ],
+-        args: ['ar-SY'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0556578654',
+-          '+966556578654',
+-          '966556578654',
+-          '596578654',
+-          '572655597',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          '+9665626626262',
+-          '+96633221097',
+-          '0114152198',
+-        ],
+-        args: ['ar-SA'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+420 123 456 789',
+-          '+420 123456789',
+-          '+420123456789',
+-          '123 456 789',
+-          '123456789',
+-        ],
+-        invalid: [
+-          '',
+-          '+42012345678',
+-        ],
+-        args: ['cs-CZ'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+49 (0) 123 456 789',
+-          '+49 (0) 123 456789',
+-          '0123/4567890',
+-          '+49 01234567890',
+-          '01234567890',
+-        ],
+-        invalid: [
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-        ],
+-        args: ['de-DE'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '55-17-3332-2155',
+-          '55-15-25661234',
+-          '551223456789',
+-          '01523456987',
+-          '022995678947',
+-          '+55-12-996551215',
+-        ],
+-        invalid: [
+-          '+017-123456789',
+-          '5501599623874',
+-          '+55012962308',
+-          '+55-015-1234-3214',
+-        ],
+-        args: ['pt-BR'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '15323456787',
+-          '13523333233',
+-          '13898728332',
+-          '+086-13238234822',
+-          '08613487234567',
+-          '8617823492338',
+-          '86-17823492338',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-        ],
+-        args: ['zh-CN'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0987123456',
+-          '+886987123456',
+-          '886987123456',
+-          '+886-987123456',
+-          '886-987123456',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '0-987123456',
+-        ],
+-        args: ['zh-TW'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        invalid: [
+-          '15323456787',
+-          '13523333233',
+-          '13898728332',
+-          '+086-13238234822',
+-          '08613487234567',
+-          '8617823492338',
+-          '86-17823492338',
+-        ],
+-        args: ['en'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0821231234',
+-          '+27821231234',
+-          '27821231234',
+-        ],
+-        invalid: [
+-          '082123',
+-          '08212312345',
+-          '21821231234',
+-          '+21821231234',
+-          '+0821231234',
+-        ],
+-        args: ['en-ZA'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '61404111222',
+-          '+61411222333',
+-          '0417123456',
+-        ],
+-        invalid: [
+-          '082123',
+-          '08212312345',
+-          '21821231234',
+-          '+21821231234',
+-          '+0821231234',
+-          '04123456789',
+-        ],
+-        args: ['en-AU'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '91234567',
+-          '9123-4567',
+-          '61234567',
+-          '51234567',
+-          '+85291234567',
+-          '+852-91234567',
+-          '+852-9123-4567',
+-          '852-91234567',
+-          `8384-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `8580-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `7109-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `7114-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `6920-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `6280-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `5908-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `5152-${random4digit()}`, // Spare - starting from 1.7.2017
+-          `4923-${random4digit()}`, // Spare - starting from 1.7.2017
+-        ],
+-        invalid: [
+-          '999',
+-          '+852-912345678',
+-          '123456789',
+-          '+852-1234-56789',
+-          `9998${random4digit()}`,  // Emergency Service (999)
+-          `9111-${random4digit()}`, // Others (911)
+-          `8521-${random4digit()}`, // Others (Conflict with country code)
+-          `8009-${random4digit()}`, // 800 Fixed Services
+-          `7211-${random4digit()}`, // Paging Service
+-          `7119-${random4digit()}`, // Paging Service
+-          `5850-${random4digit()}`, // Fixed Services
+-          `5003${random4digit()}`,  // Others (Special Services)
+-          `4300-${random4digit()}`, // Others (Network Number)
+-          `3830-${random4digit()}`, // Fixed Services
+-          `2230-${random4digit()}`, // Fixed Services
+-          `1833-${random4digit()}`, // Short Code (High traffic volume services)
+-          `0060-${random4digit()}`, // Access Code (ETS, Prime IDD for Voice)
+-        ],
+-        args: ['en-HK'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0612457898',
+-          '+33612457898',
+-          '33612457898',
+-          '0712457898',
+-          '+33712457898',
+-          '33712457898',
+-        ],
+-        invalid: [
+-          '061245789',
+-          '06124578980',
+-          '0112457898',
+-          '0212457898',
+-          '0312457898',
+-          '0412457898',
+-          '0512457898',
+-          '0812457898',
+-          '0912457898',
+-          '+34612457898',
+-          '+336124578980',
+-          '+3361245789',
+-        ],
+-        args: ['fr-FR'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+306944848966',
+-          '6944848966',
+-          '306944848966',
+-        ],
+-        invalid: [
+-          '2102323234',
+-          '+302646041461',
+-          '120000000',
+-          '20000000000',
+-          '68129485729',
+-          '6589394827',
+-          '298RI89572',
+-        ],
+-        args: ['el-GR'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '447789345856',
+-          '+447861235675',
+-          '07888814488',
+-        ],
+-        invalid: [
+-          '67699567',
+-          '0773894868',
+-          '077389f8688',
+-          '+07888814488',
+-          '0152456999',
+-          '442073456754',
+-          '+443003434751',
+-          '05073456754',
+-          '08001123123',
+-        ],
+-        args: ['en-GB'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '19876543210',
+-          '8005552222',
+-          '+15673628910',
+-        ],
+-        invalid: [
+-          '564785',
+-          '0123456789',
+-          '1437439210',
+-          '8009112340',
+-          '+10345672645',
+-          '11435213543',
+-          '2436119753',
+-          '16532116190',
+-        ],
+-        args: ['en-US'],
+-      });
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '19876543210',
+-          '8005552222',
+-          '+15673628910',
+-        ],
+-        invalid: [
+-          '564785',
+-          '0123456789',
+-          '1437439210',
+-          '8009112340',
+-          '+10345672645',
+-          '11435213543',
+-          '2436119753',
+-          '16532116190',
+-        ],
+-        args: ['en-CA'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0956684590',
+-          '0966684590',
+-          '0976684590',
+-          '+260956684590',
+-          '+260966684590',
+-          '+260976684590',
+-          '260976684590',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-          '966684590',
+-        ],
+-        args: ['en-ZM'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+79676338855',
+-          '79676338855',
+-          '89676338855',
+-          '9676338855',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-          '+9676338855',
+-          '19676338855',
+-          '6676338855',
+-          '+99676338855',
+-        ],
+-        args: ['ru-RU'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0640133338',
+-          '063333133',
+-          '0668888878',
+-          '+381645678912',
+-          '+381611314000',
+-          '0655885010',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-          '+9676338855',
+-          '19676338855',
+-          '6676338855',
+-          '+99676338855',
+-        ],
+-        args: ['sr-RS'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+6427987035',
+-          '642240512347',
+-          '0293981646',
+-          '029968425',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '+642956696123566',
+-          '+02119620856',
+-          '+9676338855',
+-          '19676338855',
+-          '6676338855',
+-          '+99676338855',
+-        ],
+-        args: ['en-NZ'],
+-      });
+-
+-      var norwegian = {
+-        valid: [
+-          '+4796338855',
+-          '+4746338855',
+-          '4796338855',
+-          '4746338855',
+-          '46338855',
+-          '96338855',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '+4676338855',
+-          '19676338855',
+-          '+4726338855',
+-          '4736338855',
+-          '66338855',
+-        ],
+-      };
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: norwegian.valid,
+-        invalid: norwegian.invalid,
+-        args: ['nb-NO'],
+-      });
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: norwegian.valid,
+-        invalid: norwegian.invalid,
+-        args: ['nn-NO'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '01636012403',
+-          '+841636012403',
+-          '1636012403',
+-          '841636012403',
+-          '+84999999999',
+-          '84999999999',
+-          '0999999999',
+-          '999999999',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-          '260976684590',
+-        ],
+-        args: ['vi-VN'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+34654789321',
+-          '654789321',
+-          '+34714789321',
+-          '714789321',
+-          '+34744789321',
+-          '744789321',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '+3465478932',
+-          '65478932',
+-          '+346547893210',
+-          '6547893210',
+-          '+34704789321',
+-          '704789321',
+-          '+34754789321',
+-          '754789321',
+-        ],
+-        args: ['es-ES'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+48512689767',
+-          '+48 56 376 87 47',
+-          '56 566 78 46',
+-          '657562855',
+-          '+48657562855',
+-          '+48 887472765',
+-          '+48 56 6572724',
+-          '+48 67 621 5461',
+-          '48 67 621 5461',
+-        ],
+-        invalid: [
+-          '+48  67 621 5461',
+-          '+55657562855',
+-          '3454535',
+-          'teststring',
+-          '',
+-          '1800-88-8687',
+-          '+6019-5830837',
+-          '357562855',
+-        ],
+-        args: ['pl-PL'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+358505557171',
+-          '0455571',
+-          '0505557171',
+-          '358505557171',
+-          '04412345',
+-          '0457 123 45 67',
+-          '+358457 123 45 67',
+-          '+358 50 555 7171',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          '045557',
+-          '045555717112312332423423421',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '010-38238383',
+-          '+3-585-0555-7171',
+-          '+9676338855',
+-          '19676338855',
+-          '6676338855',
+-          '+99676338855',
+-          '044123',
+-          '019123456789012345678901',
+-        ],
+-        args: ['fi-FI'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+60128228789',
+-          '+60195830837',
+-          '+6019-5830837',
+-          '+6019-5830837',
+-          '0128737867',
+-          '01468987837',
+-          '016-2838768',
+-          '016 2838768',
+-        ],
+-        invalid: [
+-          '12345',
+-          '601238788657',
+-          '088387675',
+-          '16-2838768',
+-          '032551433',
+-          '6088-387888',
+-          '088-261987',
+-          '1800-88-8687',
+-          '088-320000',
+-        ],
+-        args: ['ms-MY'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0312345678',
+-          '0721234567',
+-          '09012345688',
+-          '06 1234 5678',
+-          '072 123 4567',
+-          '0729 12 3456',
+-          '07296 1 2345',
+-          '072961 2345',
+-          '090 1234 5678',
+-          '03-1234-5678',
+-          '+81312345678',
+-          '+816-1234-5678',
+-          '+8190-1234-5678',
+-        ],
+-        invalid: [
+-          '12345',
+-          '',
+-          '045555717112312332423423421',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '+3-585-0555-7171',
+-          '0 1234 5689',
+-          '16 1234 5689',
+-          '03_1234_5689',
+-        ],
+-        args: ['ja-JP'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '370 3175423',
+-          '333202925',
+-          '+39 310 7688449',
+-          '+39 3339847632',
+-        ],
+-        invalid: [
+-          '011 7387545',
+-          '12345',
+-          '+45 345 6782395',
+-        ],
+-        args: ['it-IT'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0470123456',
+-          '+32470123456',
+-          '32470123456',
+-          '021234567',
+-          '+3221234567',
+-          '3221234567',
+-        ],
+-        invalid: [
+-          '12345',
+-          '+3212345',
+-          '3212345',
+-          '04701234567',
+-          '+3204701234567',
+-          '3204701234567',
+-          '0212345678',
+-          '+320212345678',
+-          '320212345678',
+-        ],
+-        args: ['fr-BE'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0470123456',
+-          '+32470123456',
+-          '32470123456',
+-          '021234567',
+-          '+3221234567',
+-          '3221234567',
+-        ],
+-        invalid: [
+-          '12345',
+-          '+3212345',
+-          '3212345',
+-          '04701234567',
+-          '+3204701234567',
+-          '3204701234567',
+-          '0212345678',
+-          '+320212345678',
+-          '320212345678',
+-        ],
+-        args: ['nl-BE'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+40740123456',
+-          '+40 740123456',
+-          '+40740 123 456',
+-          '+40740.123.456',
+-          '+40740-123-456',
+-          '40740123456',
+-          '40 740123456',
+-          '40740 123 456',
+-          '40740.123.456',
+-          '40740-123-456',
+-          '0740123456',
+-          '0740/123456',
+-          '0740 123 456',
+-          '0740.123.456',
+-          '0740-123-456',
+-        ],
+-        invalid: [
+-          '',
+-          'Vml2YW11cyBmZXJtZtesting123',
+-          '123456',
+-          '740123456',
+-          '+40640123456',
+-          '+40210123456',
+-        ],
+-        args: ['ro-RO'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '0217123456',
+-          '0811 778 998',
+-          '089931236181900',
+-          '622178878890',
+-          '62811 778 998',
+-          '62811778998',
+-          '6289931236181900',
+-          '6221 740123456',
+-          '62899 740123456',
+-          '62899 7401 2346',
+-          '0341 8123456',
+-          '0778 89800910',
+-          '0741 123456',
+-          '+6221740123456',
+-          '+62811 778 998',
+-          '+62811778998',
+-        ],
+-        invalid: [
+-          '+65740 123 456',
+-          '',
+-          'ASDFGJKLmZXJtZtesting123',
+-          '123456',
+-          '740123456',
+-          '+65640123456',
+-          '+64210123456',
+-        ],
+-        args: ['id-ID'],
+-      });
+-
+-      test({
+-        validator: 'isMobilePhone',
+-        valid: [
+-          '+37051234567',
+-          '851234567',
+-        ],
+-        invalid: [
+-          '+65740 123 456',
+-          '',
+-          'ASDFGJKLmZXJtZtesting123',
+-          '123456',
+-          '740123456',
+-          '+65640123456',
+-          '+64210123456',
+-        ],
+-        args: ['lt-LT'],
+-      });
+-    });
+-
+-    it('should validate currency', function () {
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          { },
+-          '-$##,###.## (en-US, en-CA, en-AU, en-NZ, en-HK)',
+-        ],
+-        valid: [
+-          '-$10,123.45',
+-          '$10,123.45',
+-          '$10123.45',
+-          '10,123.45',
+-          '10123.45',
+-          '10,123',
+-          '1,123,456',
+-          '1123456',
+-          '1.39',
+-          '.03',
+-          '0.10',
+-          '$0.10',
+-          '-$0.01',
+-          '-$.99',
+-          '$100,234,567.89',
+-          '$10,123',
+-          '10,123',
+-          '-10123',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '$1.1',
+-          '$ 32.50',
+-          '500$',
+-          '.0001',
+-          '$.001',
+-          '$0.001',
+-          '12,34.56',
+-          '123456,123,123456',
+-          '123,4',
+-          ',123',
+-          '$-,123',
+-          '$',
+-          '.',
+-          ',',
+-          '00',
+-          '$-',
+-          '$-,.',
+-          '-',
+-          '-$',
+-          '',
+-          '- $',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            require_symbol: true,
+-          },
+-          '-$##,###.## with $ required (en-US, en-CA, en-AU, en-NZ, en-HK)',
+-        ],
+-        valid: [
+-          '-$10,123.45',
+-          '$10,123.45',
+-          '$10123.45',
+-          '$10,123.45',
+-          '$10,123',
+-          '$1,123,456',
+-          '$1123456',
+-          '$1.39',
+-          '$.03',
+-          '$0.10',
+-          '$0.10',
+-          '-$0.01',
+-          '-$.99',
+-          '$100,234,567.89',
+-          '$10,123',
+-          '-$10123',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '$1.234',
+-          '1.1',
+-          '$1.1',
+-          '$ 32.50',
+-          ' 32.50',
+-          '500',
+-          '10,123,456',
+-          '.0001',
+-          '$.001',
+-          '$0.001',
+-          '1,234.56',
+-          '123456,123,123456',
+-          '$123456,123,123456',
+-          '123.4',
+-          '$123.4',
+-          ',123',
+-          '$,123',
+-          '$-,123',
+-          '$',
+-          '.',
+-          '$.',
+-          ',',
+-          '$,',
+-          '00',
+-          '$00',
+-          '$-',
+-          '$-,.',
+-          '-',
+-          '-$',
+-          '',
+-          '$ ',
+-          '- $',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: '¥',
+-            negative_sign_before_digits: true,
+-          },
+-          '¥-##,###.## (zh-CN)',
+-        ],
+-        valid: [
+-          '123,456.78',
+-          '-123,456.78',
+-          '¥6,954,231',
+-          '¥-6,954,231',
+-          '¥10.03',
+-          '¥-10.03',
+-          '10.03',
+-          '1.39',
+-          '.03',
+-          '0.10',
+-          '¥-10567.01',
+-          '¥0.01',
+-          '¥1,234,567.89',
+-          '¥10,123',
+-          '¥-10,123',
+-          '¥-10,123.45',
+-          '10,123',
+-          '10123',
+-          '¥-100',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '¥1.1',
+-          '5,00',
+-          '.0001',
+-          '¥.001',
+-          '¥0.001',
+-          '12,34.56',
+-          '123456,123,123456',
+-          '123 456',
+-          ',123',
+-          '¥-,123',
+-          '',
+-          ' ',
+-          '¥',
+-          '¥-',
+-          '¥-,.',
+-          '-',
+-          '- ¥',
+-          '-¥',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: '¥',
+-            allow_negatives: false,
+-          },
+-          '¥##,###.## with no negatives (zh-CN)',
+-        ],
+-        valid: [
+-          '123,456.78',
+-          '¥6,954,231',
+-          '¥10.03',
+-          '10.03',
+-          '1.39',
+-          '.03',
+-          '0.10',
+-          '¥0.01',
+-          '¥1,234,567.89',
+-          '¥10,123',
+-          '10,123',
+-          '10123',
+-          '¥100',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '-123,456.78',
+-          '¥-6,954,231',
+-          '¥-10.03',
+-          '¥-10567.01',
+-          '¥1.1',
+-          '¥-10,123',
+-          '¥-10,123.45',
+-          '5,00',
+-          '¥-100',
+-          '.0001',
+-          '¥.001',
+-          '¥-.001',
+-          '¥0.001',
+-          '12,34.56',
+-          '123456,123,123456',
+-          '123 456',
+-          ',123',
+-          '¥-,123',
+-          '',
+-          ' ',
+-          '¥',
+-          '¥-',
+-          '¥-,.',
+-          '-',
+-          '- ¥',
+-          '-¥',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: 'R',
+-            negative_sign_before_digits: true,
+-            thousands_separator: ' ',
+-            decimal_separator: ',',
+-            allow_negative_sign_placeholder: true,
+-          },
+-          'R ## ###,## and R-10 123,25 (el-ZA)',
+-        ],
+-        valid: [
+-          '123 456,78',
+-          '-10 123',
+-          'R-10 123',
+-          'R 6 954 231',
+-          'R10,03',
+-          '10,03',
+-          '1,39',
+-          ',03',
+-          '0,10',
+-          'R10567,01',
+-          'R0,01',
+-          'R1 234 567,89',
+-          'R10 123',
+-          'R 10 123',
+-          'R 10123',
+-          'R-10123',
+-          '10 123',
+-          '10123',
+-        ],
+-        invalid: [
+-          '1,234',
+-          'R -10123',
+-          'R- 10123',
+-          'R,1',
+-          ',0001',
+-          'R,001',
+-          'R0,001',
+-          '12 34,56',
+-          '123456 123 123456',
+-          ' 123',
+-          '- 123',
+-          '123 ',
+-          '',
+-          ' ',
+-          'R',
+-          'R- .1',
+-          'R-',
+-          '-',
+-          '-R 10123',
+-          'R00',
+-          'R -',
+-          '-R',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: '€',
+-            thousands_separator: '.',
+-            decimal_separator: ',',
+-            allow_space_after_symbol: true,
+-          },
+-          '-€ ##.###,## (it-IT)',
+-        ],
+-        valid: [
+-          '123.456,78',
+-          '-123.456,78',
+-          '€6.954.231',
+-          '-€6.954.231',
+-          '€ 896.954.231',
+-          '-€ 896.954.231',
+-          '16.954.231',
+-          '-16.954.231',
+-          '€10,03',
+-          '-€10,03',
+-          '10,03',
+-          '-10,03',
+-          '-1,39',
+-          ',03',
+-          '0,10',
+-          '-€10567,01',
+-          '-€ 10567,01',
+-          '€ 0,01',
+-          '€1.234.567,89',
+-          '€10.123',
+-          '10.123',
+-          '-€10.123',
+-          '€ 10.123',
+-          '€10.123',
+-          '€ 10123',
+-          '10.123',
+-          '-10123',
+-        ],
+-        invalid: [
+-          '1,234',
+-          '€ 1,1',
+-          '50#,50',
+-          '123,@€ ',
+-          '€€500',
+-          ',0001',
+-          '€ ,001',
+-          '€0,001',
+-          '12.34,56',
+-          '123456.123.123456',
+-          '€123€',
+-          '',
+-          ' ',
+-          '€',
+-          ' €',
+-          '€ ',
+-          '€€',
+-          ' 123',
+-          '- 123',
+-          '.123',
+-          '-€.123',
+-          '123 ',
+-          '€-',
+-          '- €',
+-          '€ - ',
+-          '-',
+-          '- ',
+-          '-€',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: '€',
+-            thousands_separator: '.',
+-            symbol_after_digits: true,
+-            decimal_separator: ',',
+-            allow_space_after_digits: true,
+-          },
+-          '-##.###,## € (el-GR)',
+-        ],
+-        valid: [
+-          '123.456,78',
+-          '-123.456,78',
+-          '6.954.231 €',
+-          '-6.954.231 €',
+-          '896.954.231',
+-          '-896.954.231',
+-          '16.954.231',
+-          '-16.954.231',
+-          '10,03€',
+-          '-10,03€',
+-          '10,03',
+-          '-10,03',
+-          '1,39',
+-          ',03',
+-          '-,03',
+-          '-,03 €',
+-          '-,03€',
+-          '0,10',
+-          '10567,01€',
+-          '0,01 €',
+-          '1.234.567,89€',
+-          '10.123€',
+-          '10.123',
+-          '10.123€',
+-          '10.123 €',
+-          '10123 €',
+-          '10.123',
+-          '10123',
+-        ],
+-        invalid: [
+-          '1,234',
+-          '1,1 €',
+-          ',0001',
+-          ',001 €',
+-          '0,001€',
+-          '12.34,56',
+-          '123456.123.123456',
+-          '€123€',
+-          '',
+-          ' ',
+-          '€',
+-          ' €',
+-          '€ ',
+-          ' 123',
+-          '- 123',
+-          '.123',
+-          '-.123€',
+-          '-.123 €',
+-          '123 ',
+-          '-€',
+-          '- €',
+-          '-',
+-          '- ',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: 'kr.',
+-            negative_sign_before_digits: true,
+-            thousands_separator: '.',
+-            decimal_separator: ',',
+-            allow_space_after_symbol: true,
+-          },
+-          'kr. -##.###,## (da-DK)',
+-        ],
+-        valid: [
+-          '123.456,78',
+-          '-10.123',
+-          'kr. -10.123',
+-          'kr.-10.123',
+-          'kr. 6.954.231',
+-          'kr.10,03',
+-          'kr. -10,03',
+-          '10,03',
+-          '1,39',
+-          ',03',
+-          '0,10',
+-          'kr. 10567,01',
+-          'kr. 0,01',
+-          'kr. 1.234.567,89',
+-          'kr. -1.234.567,89',
+-          '10.123',
+-          'kr. 10.123',
+-          'kr.10.123',
+-          '10123',
+-          '10.123',
+-          'kr.-10123',
+-        ],
+-        invalid: [
+-          '1,234',
+-          'kr.  -10123',
+-          'kr.,1',
+-          ',0001',
+-          'kr. ,001',
+-          'kr.0,001',
+-          '12.34,56',
+-          '123456.123.123456',
+-          '.123',
+-          'kr.-.123',
+-          'kr. -.123',
+-          '- 123',
+-          '123 ',
+-          '',
+-          ' ',
+-          'kr.',
+-          ' kr.',
+-          'kr. ',
+-          'kr.-',
+-          'kr. -',
+-          'kr. - ',
+-          ' - ',
+-          '-',
+-          '- kr.',
+-          '-kr.',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            symbol: 'kr.',
+-            allow_negatives: false,
+-            negative_sign_before_digits: true,
+-            thousands_separator: '.',
+-            decimal_separator: ',',
+-            allow_space_after_symbol: true,
+-          },
+-          'kr. ##.###,## with no negatives (da-DK)',
+-        ],
+-        valid: [
+-          '123.456,78',
+-          '10.123',
+-          'kr. 10.123',
+-          'kr.10.123',
+-          'kr. 6.954.231',
+-          'kr.10,03',
+-          'kr. 10,03',
+-          '10,03',
+-          '1,39',
+-          ',03',
+-          '0,10',
+-          'kr. 10567,01',
+-          'kr. 0,01',
+-          'kr. 1.234.567,89',
+-          'kr.1.234.567,89',
+-          '10.123',
+-          'kr. 10.123',
+-          'kr.10.123',
+-          '10123',
+-          '10.123',
+-          'kr.10123',
+-        ],
+-        invalid: [
+-          '1,234',
+-          '-10.123',
+-          'kr. -10.123',
+-          'kr. -1.234.567,89',
+-          'kr.-10123',
+-          'kr.  -10123',
+-          'kr.-10.123',
+-          'kr. -10,03',
+-          'kr.,1',
+-          ',0001',
+-          'kr. ,001',
+-          'kr.0,001',
+-          '12.34,56',
+-          '123456.123.123456',
+-          '.123',
+-          'kr.-.123',
+-          'kr. -.123',
+-          '- 123',
+-          '123 ',
+-          '',
+-          ' ',
+-          'kr.',
+-          ' kr.',
+-          'kr. ',
+-          'kr.-',
+-          'kr. -',
+-          'kr. - ',
+-          ' - ',
+-          '-',
+-          '- kr.',
+-          '-kr.',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          {
+-            parens_for_negatives: true,
+-          },
+-          '($##,###.##) (en-US, en-HK)',
+-        ],
+-        valid: [
+-          '1,234',
+-          '(1,234)',
+-          '($6,954,231)',
+-          '$10.03',
+-          '(10.03)',
+-          '($10.03)',
+-          '1.39',
+-          '.03',
+-          '(.03)',
+-          '($.03)',
+-          '0.10',
+-          '$10567.01',
+-          '($0.01)',
+-          '$1,234,567.89',
+-          '$10,123',
+-          '(10,123)',
+-          '10123',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '($1.1)',
+-          '-$1.10',
+-          '$ 32.50',
+-          '500$',
+-          '.0001',
+-          '$.001',
+-          '($0.001)',
+-          '12,34.56',
+-          '123456,123,123456',
+-          '( 123)',
+-          ',123',
+-          '$-,123',
+-          '',
+-          ' ',
+-          '  ',
+-          '   ',
+-          '$',
+-          '$ ',
+-          ' $',
+-          ' 123',
+-          '(123) ',
+-          '.',
+-          ',',
+-          '00',
+-          '$-',
+-          '$ - ',
+-          '$- ',
+-          ' - ',
+-          '-',
+-          '- $',
+-          '-$',
+-          '()',
+-          '( )',
+-          '(  -)',
+-          '(  - )',
+-          '(  -  )',
+-          '(-)',
+-          '(-$)',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isCurrency',
+-        args: [
+-          { allow_negatives: false },
+-          '$##,###.## with no negatives (en-US, en-CA, en-AU, en-HK)',
+-        ],
+-        valid: [
+-          '$10,123.45',
+-          '$10123.45',
+-          '10,123.45',
+-          '10123.45',
+-          '10,123',
+-          '1,123,456',
+-          '1123456',
+-          '1.39',
+-          '.03',
+-          '0.10',
+-          '$0.10',
+-          '$100,234,567.89',
+-          '$10,123',
+-          '10,123',
+-        ],
+-        invalid: [
+-          '1.234',
+-          '-1.234',
+-          '-10123',
+-          '-$0.01',
+-          '-$.99',
+-          '$1.1',
+-          '-$1.1',
+-          '$ 32.50',
+-          '500$',
+-          '.0001',
+-          '$.001',
+-          '$0.001',
+-          '12,34.56',
+-          '123456,123,123456',
+-          '-123456,123,123456',
+-          '123,4',
+-          ',123',
+-          '$-,123',
+-          '$',
+-          '.',
+-          ',',
+-          '00',
+-          '$-',
+-          '$-,.',
+-          '-',
+-          '-$',
+-          '',
+-          '- $',
+-          '-$10,123.45',
+-        ],
+-      });
+-
+-      test({
+-        validator: 'isBoolean',
+-        valid: [
+-          'true',
+-          'false',
+-          '0',
+-          '1',
+-        ],
+-        invalid: [
+-          '1.0',
+-          '0.0',
+-          'true ',
+-          'False',
+-          'True',
+-          'yes',
+-        ],
+-      });
+-    });
+-
+-    it('should validate ISO 8601 dates', function () {
+-          // from http://www.pelagodesign.com/blog/2009/05/20/iso-8601-date-validation-that-doesnt-suck/
+-      test({
+-        validator: 'isISO8601',
+-        valid: [
+-          '2009-12T12:34',
+-          '2009',
+-          '2009-05-19',
+-          '2009-05-19',
+-          '20090519',
+-          '2009123',
+-          '2009-05',
+-          '2009-123',
+-          '2009-222',
+-          '2009-001',
+-          '2009-W01-1',
+-          '2009-W51-1',
+-          '2009-W511',
+-          '2009-W33',
+-          '2009W511',
+-          '2009-05-19',
+-          '2009-05-19 00:00',
+-          '2009-05-19 14',
+-          '2009-05-19 14:31',
+-          '2009-05-19 14:39:22',
+-          '2009-05-19T14:39Z',
+-          '2009-W21-2',
+-          '2009-W21-2T01:22',
+-          '2009-139',
+-          '2009-05-19 14:39:22-06:00',
+-          '2009-05-19 14:39:22+0600',
+-          '2009-05-19 14:39:22-01',
+-          '20090621T0545Z',
+-          '2007-04-06T00:00',
+-          '2007-04-05T24:00',
+-          '2010-02-18T16:23:48.5',
+-          '2010-02-18T16:23:48,444',
+-          '2010-02-18T16:23:48,3-06:00',
+-          '2010-02-18T16:23.4',
+-          '2010-02-18T16:23,25',
+-          '2010-02-18T16:23.33+0600',
+-          '2010-02-18T16.23334444',
+-          '2010-02-18T16,2283',
+-          '2009-05-19 143922.500',
+-          '2009-05-19 1439,55',
+-        ],
+-        invalid: [
+-          '200905',
+-          '2009367',
+-          '2009-',
+-          '2007-04-05T24:50',
+-          '2009-000',
+-          '2009-M511',
+-          '2009M511',
+-          '2009-05-19T14a39r',
+-          '2009-05-19T14:3924',
+-          '2009-0519',
+-          '2009-05-1914:39',
+-          '2009-05-19 14:',
+-          '2009-05-19r14:39',
+-          '2009-05-19 14a39a22',
+-          '200912-01',
+-          '2009-05-19 14:39:22+06a00',
+-          '2009-05-19 146922.500',
+-          '2010-02-18T16.5:23.35:48',
+-          '2010-02-18T16:23.35:48',
+-          '2010-02-18T16:23.35:48.45',
+-          '2009-05-19 14.5.44',
+-          '2010-02-18T16:23.33.600',
+-          '2010-02-18T16,25:23:48,444',
+-        ],
+-      });
+-    });
+-
+-    it('should validate whitelisted characters', function () {
+-      test({
+-        validator: 'isWhitelisted',
+-        args: ['abcdefghijklmnopqrstuvwxyz-'],
+-        valid: ['foo', 'foobar', 'baz-foo'],
+-        invalid: ['foo bar', 'fo.bar', 'türkçe'],
+-      });
+-    });
+-
+-    it('should error on non-string input', function () {
+-      var empty = [undefined, null, [], NaN];
+-      empty.forEach(function (item) {
+-        assert.throws(validator.isEmpty.bind(null, item));
+-      });
+-    });
+-
+-    it('should validate dataURI', function () {
+-      /* eslint-disable max-len */
+-      test({
+-        validator: 'isDataURI',
+-        valid: [
+-          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAABlBMVEUAAAD///+l2Z/dAAAAM0lEQVR4nGP4/5/h/1+G/58ZDrAz3D/McH8yw83NDDeNGe4Ug9C9zwz3gVLMDA/A6P9/AFGGFyjOXZtQAAAAAElFTkSuQmCC',
+-          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIBAMAAAA2IaO4AAAAFVBMVEXk5OTn5+ft7e319fX29vb5+fn///++GUmVAAAALUlEQVQIHWNICnYLZnALTgpmMGYIFWYIZTA2ZFAzTTFlSDFVMwVyQhmAwsYMAKDaBy0axX/iAAAAAElFTkSuQmCC',
+-          '   data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIBAMAAAA2IaO4AAAAFVBMVEXk5OTn5+ft7e319fX29vb5+fn///++GUmVAAAALUlEQVQIHWNICnYLZnALTgpmMGYIFWYIZTA2ZFAzTTFlSDFVMwVyQhmAwsYMAKDaBy0axX/iAAAAAElFTkSuQmCC   ',
+-          'data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22100%22%20height%3D%22100%22%3E%3Crect%20fill%3D%22%2300B1FF%22%20width%3D%22100%22%20height%3D%22100%22%2F%3E%3C%2Fsvg%3E',
+-          'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCBmaWxsPSIjMDBCMUZGIiB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIvPjwvc3ZnPg==',
+-          ' data:,Hello%2C%20World!',
+-          ' data:,Hello World!',
+-          ' data:text/plain;base64,SGVsbG8sIFdvcmxkIQ%3D%3D',
+-          ' data:text/html,%3Ch1%3EHello%2C%20World!%3C%2Fh1%3E',
+-          'data:,A%20brief%20note',
+-          'data:text/html;charset=US-ASCII,%3Ch1%3EHello!%3C%2Fh1%3E',
+-        ],
+-        invalid: [
+-          'dataxbase64',
+-          'data:HelloWorld',
+-          'data:text/html;charset=,%3Ch1%3EHello!%3C%2Fh1%3E',
+-          'data:text/html;charset,%3Ch1%3EHello!%3C%2Fh1%3E', 'data:base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAABlBMVEUAAAD///+l2Z/dAAAAM0lEQVR4nGP4/5/h/1+G/58ZDrAz3D/McH8yw83NDDeNGe4Ug9C9zwz3gVLMDA/A6P9/AFGGFyjOXZtQAAAAAElFTkSuQmCC',
+-          '',
+-          'http://wikipedia.org',
+-          'base64',
+-          'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAABlBMVEUAAAD///+l2Z/dAAAAM0lEQVR4nGP4/5/h/1+G/58ZDrAz3D/McH8yw83NDDeNGe4Ug9C9zwz3gVLMDA/A6P9/AFGGFyjOXZtQAAAAAElFTkSuQmCC',
+-        ],
+-      });
+-      /* eslint-enable max-len */
+-    });
+-  });
+-}
+diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/xpcshell.ini b/devtools/client/shared/vendor/stringvalidator/tests/unit/xpcshell.ini
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/xpcshell.ini
++++ /dev/null
+@@ -1,8 +0,0 @@
+-[DEFAULT]
+-tags = devtools
+-head = head_stringvalidator.js
+-firefox-appdir = browser
+-skip-if = toolkit == 'android'
+-
+-[test_sanitizers.js]
+-[test_validators.js]
+diff --git a/devtools/client/shared/vendor/stringvalidator/util/assert.js b/devtools/client/shared/vendor/stringvalidator/util/assert.js
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/util/assert.js
++++ /dev/null
+@@ -1,215 +0,0 @@
+-// // based on node assert, original notice:
+-// // NB: The URL to the CommonJS spec is kept just for tradition.
+-// //     node-assert has evolved a lot since then, both in API and behavior.
+-//
+-// // http://wiki.commonjs.org/wiki/Unit_Testing/1.0
+-// //
+-// // THIS IS NOT TESTED NOR LIKELY TO WORK OUTSIDE V8!
+-// //
+-// // Originally from narwhal.js (http://narwhaljs.org)
+-// // Copyright (c) 2009 Thomas Robinson <280north.com>
+-// //
+-// // Permission is hereby granted, free of charge, to any person obtaining a copy
+-// // of this software and associated documentation files (the 'Software'), to
+-// // deal in the Software without restriction, including without limitation the
+-// // rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+-// // sell copies of the Software, and to permit persons to whom the Software is
+-// // furnished to do so, subject to the following conditions:
+-// //
+-// // The above copyright notice and this permission notice shall be included in
+-// // all copies or substantial portions of the Software.
+-// //
+-// // THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-// // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-// // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+-// // AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+-// // ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+-// // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-
+-"use strict";
+-
+-var regex = /\s*function\s+([^\(\s]*)\s*/;
+-
+-var functionsHaveNames = (function () {
+-  return function foo() {}.name === "foo";
+-}());
+-
+-function assert(value, message) {
+-  if (!value) {
+-    fail(value, true, message, "==", assert.ok);
+-  }
+-}
+-
+-assert.equal = function equal(actual, expected, message) {
+-  if (actual != expected) {
+-    fail(actual, expected, message, "==", assert.equal);
+-  }
+-};
+-
+-assert.throws = function (block, error, message) {
+-  _throws(true, block, error, message);
+-};
+-
+-function _throws(shouldThrow, block, expected, message) {
+-  var actual;
+-
+-  if (typeof block !== "function") {
+-    throw new TypeError(`"block" argument must be a function`);
+-  }
+-
+-  if (typeof expected === "string") {
+-    message = expected;
+-    expected = null;
+-  }
+-
+-  actual = _tryBlock(block);
+-
+-  message = (expected && expected.name ? " (" + expected.name + ")." : ".") +
+-            (message ? " " + message : ".");
+-
+-  if (shouldThrow && !actual) {
+-    fail(actual, expected, "Missing expected exception" + message);
+-  }
+-
+-  var userProvidedMessage = typeof message === "string";
+-  var isUnwantedException = !shouldThrow && isError(actual);
+-  var isUnexpectedException = !shouldThrow && actual && !expected;
+-
+-  if ((isUnwantedException &&
+-      userProvidedMessage &&
+-      expectedException(actual, expected)) ||
+-      isUnexpectedException) {
+-    fail(actual, expected, "Got unwanted exception" + message);
+-  }
+-
+-  if ((shouldThrow && actual && expected &&
+-      !expectedException(actual, expected)) || (!shouldThrow && actual)) {
+-    throw actual;
+-  }
+-}
+-
+-function fail(actual, expected, message, operator, stackStartFunction) {
+-  throw new assert.AssertionError({
+-    message: message,
+-    actual: actual,
+-    expected: expected,
+-    operator: operator,
+-    stackStartFunction: stackStartFunction
+-  });
+-}
+-
+-assert.fail = fail;
+-
+-assert.AssertionError = function AssertionError(options) {
+-  this.name = "AssertionError";
+-  this.actual = options.actual;
+-  this.expected = options.expected;
+-  this.operator = options.operator;
+-  if (options.message) {
+-    this.message = options.message;
+-    this.generatedMessage = false;
+-  } else {
+-    this.message = getMessage(this);
+-    this.generatedMessage = true;
+-  }
+-  var stackStartFunction = options.stackStartFunction || fail;
+-  if (Error.captureStackTrace) {
+-    Error.captureStackTrace(this, stackStartFunction);
+-  } else {
+-    // non v8 browsers so we can have a stacktrace
+-    var err = new Error();
+-    if (err.stack) {
+-      var out = err.stack;
+-
+-      // try to strip useless frames
+-      var fn_name = getName(stackStartFunction);
+-      var idx = out.indexOf("\n" + fn_name);
+-      if (idx >= 0) {
+-        // once we have located the function frame
+-        // we need to strip out everything before it (and its line)
+-        var next_line = out.indexOf("\n", idx + 1);
+-        out = out.substring(next_line + 1);
+-      }
+-
+-      this.stack = out;
+-    }
+-  }
+-};
+-
+-function expectedException(actual, expected) {
+-  if (!actual || !expected) {
+-    return false;
+-  }
+-
+-  if (Object.prototype.toString.call(expected) == "[object RegExp]") {
+-    return expected.test(actual);
+-  }
+-
+-  try {
+-    if (actual instanceof expected) {
+-      return true;
+-    }
+-  } catch (e) {
+-    // Ignore.  The instanceof check doesn"t work for arrow functions.
+-  }
+-
+-  if (Error.isPrototypeOf(expected)) {
+-    return false;
+-  }
+-
+-  return expected.call({}, actual) === true;
+-}
+-
+-function _tryBlock(block) {
+-  var error;
+-  try {
+-    block();
+-  } catch (e) {
+-    error = e;
+-  }
+-  return error;
+-}
+-
+-function isError(obj) {
+-  return obj instanceof Error;
+-}
+-
+-function isFunction(value) {
+-  return typeof value === "function";
+-}
+-
+-function getMessage(self) {
+-  return truncate(inspect(self.actual), 128) + " " +
+-         self.operator + " " +
+-         truncate(inspect(self.expected), 128);
+-}
+-
+-function getName(func) {
+-  if (!isFunction(func)) {
+-    return null;
+-  }
+-  if (functionsHaveNames) {
+-    return func.name;
+-  }
+-  var str = func.toString();
+-  var match = str.match(regex);
+-  return match && match[1];
+-}
+-
+-function truncate(s, n) {
+-  if (typeof s === "string") {
+-    return s.length < n ? s : s.slice(0, n);
+-  }
+-  return s;
+-}
+-
+-function inspect(something) {
+-  if (functionsHaveNames || !isFunction(something)) {
+-    throw new Error(something);
+-  }
+-  var rawname = getName(something);
+-  var name = rawname ? ": " + rawname : "";
+-  return "[Function" + name + "]";
+-}
+-
+-exports.assert = assert;
+diff --git a/devtools/client/shared/vendor/stringvalidator/util/moz.build b/devtools/client/shared/vendor/stringvalidator/util/moz.build
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/util/moz.build
++++ /dev/null
+@@ -1,9 +0,0 @@
+-# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
+-# vim: set filetype=python:
+-# This Source Code Form is subject to the terms of the Mozilla Public
+-# License, v. 2.0. If a copy of the MPL was not distributed with this
+-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-
+-DevToolsModules(
+-    'assert.js',
+-)
+diff --git a/devtools/client/shared/vendor/stringvalidator/validator.js b/devtools/client/shared/vendor/stringvalidator/validator.js
+deleted file mode 100644
+--- a/devtools/client/shared/vendor/stringvalidator/validator.js
++++ /dev/null
+@@ -1,1489 +0,0 @@
+-/*
+- * Copyright (c) 2016 Chris O"Hara <cohara87@gmail.com>
+- *
+- * Permission is hereby granted, free of charge, to any person obtaining
+- * a copy of this software and associated documentation files (the
+- * "Software"), to deal in the Software without restriction, including
+- * without limitation the rights to use, copy, modify, merge, publish,
+- * distribute, sublicense, and/or sell copies of the Software, and to
+- * permit persons to whom the Software is furnished to do so, subject to
+- * the following conditions:
+- *
+- * The above copyright notice and this permission notice shall be
+- * included in all copies or substantial portions of the Software.
+- *
+- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+- * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+- * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+- * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+- *
+- * NOTE: This utility is derived from https://github.com/chriso/validator.js but it is
+- *       **NOT** the same as the original. We have made the following changes:
+- *         - Changed mocha tests to xpcshell based tests.
+- *         - Merged the following pull requests:
+- *           - [isMobileNumber] Added Lithuanian number pattern #667
+- *           - Hongkong mobile number #665
+- *           - Added option to validate any phone locale #663
+- *           - Added validation for ISRC strings #660
+- *         - Added isRFC5646 for rfc 5646 #572
+- *         - Added isSemVer for version numbers.
+- *         - Added isRGBColor for RGB colors.
+- *
+- * UPDATING: PLEASE FOLLOW THE INSTRUCTIONS INSIDE UPDATING.md
+- */
+-
+-"use strict";
+-
+-(function (global, factory) {
+-      typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
+-      typeof define === 'function' && define.amd ? define(factory) :
+-      (global.validator = factory());
+-}(this, function () { 'use strict';
+-
+-      function assertString(input) {
+-        if (typeof input !== 'string') {
+-          throw new TypeError('This library (validator.js) validates strings only');
+-        }
+-      }
+-
+-      function toDate(date) {
+-        assertString(date);
+-        date = Date.parse(date);
+-        return !isNaN(date) ? new Date(date) : null;
+-      }
+-
+-      function toFloat(str) {
+-        assertString(str);
+-        return parseFloat(str);
+-      }
+-
+-      function toInt(str, radix) {
+-        assertString(str);
+-        return parseInt(str, radix || 10);
+-      }
+-
+-      function toBoolean(str, strict) {
+-        assertString(str);
+-        if (strict) {
+-          return str === '1' || str === 'true';
+-        }
+-        return str !== '0' && str !== 'false' && str !== '';
+-      }
+-
+-      function equals(str, comparison) {
+-        assertString(str);
+-        return str === comparison;
+-      }
+-
+-      var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) {
+-        return typeof obj;
+-      } : function (obj) {
+-        return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj;
+-      };
+-
+-      var asyncGenerator = function () {
+-        function AwaitValue(value) {
+-          this.value = value;
+-        }
+-
+-        function AsyncGenerator(gen) {
+-          var front, back;
+-
+-          function send(key, arg) {
+-            return new Promise(function (resolve, reject) {
+-              var request = {
+-                key: key,
+-                arg: arg,
+-                resolve: resolve,
+-                reject: reject,
+-                next: null
+-              };
+-
+-              if (back) {
+-                back = back.next = request;
+-              } else {
+-                front = back = request;
+-                resume(key, arg);
+-              }
+-            });
+-          }
+-
+-          function resume(key, arg) {
+-            try {
+-              var result = gen[key](arg);
+-              var value = result.value;
+-
+-              if (value instanceof AwaitValue) {
+-                Promise.resolve(value.value).then(function (arg) {
+-                  resume("next", arg);
+-                }, function (arg) {
+-                  resume("throw", arg);
+-                });
+-              } else {
+-                settle(result.done ? "return" : "normal", result.value);
+-              }
+-            } catch (err) {
+-              settle("throw", err);
+-            }
+-          }
+-
+-          function settle(type, value) {
+-            switch (type) {
+-              case "return":
+-                front.resolve({
+-                  value: value,
+-                  done: true
+-                });
+-                break;
+-
+-              case "throw":
+-                front.reject(value);
+-                break;
+-
+-              default:
+-                front.resolve({
+-                  value: value,
+-                  done: false
+-                });
+-                break;
+-            }
+-
+-            front = front.next;
+-
+-            if (front) {
+-              resume(front.key, front.arg);
+-            } else {
+-              back = null;
+-            }
+-          }
+-
+-          this._invoke = send;
+-
+-          if (typeof gen.return !== "function") {
+-            this.return = undefined;
+-          }
+-        }
+-
+-        if (typeof Symbol === "function" && Symbol.asyncIterator) {
+-          AsyncGenerator.prototype[Symbol.asyncIterator] = function () {
+-            return this;
+-          };
+-        }
+-
+-        AsyncGenerator.prototype.next = function (arg) {
+-          return this._invoke("next", arg);
+-        };
+-
+-        AsyncGenerator.prototype.throw = function (arg) {
+-          return this._invoke("throw", arg);
+-        };
+-
+-        AsyncGenerator.prototype.return = function (arg) {
+-          return this._invoke("return", arg);
+-        };
+-
+-        return {
+-          wrap: function (fn) {
+-            return function () {
+-              return new AsyncGenerator(fn.apply(this, arguments));
+-            };
+-          },
+-          await: function (value) {
+-            return new AwaitValue(value);
+-          }
+-        };
+-      }();
+-
+-      function toString(input) {
+-        if ((typeof input === 'undefined' ? 'undefined' : _typeof(input)) === 'object' && input !== null) {
+-          if (typeof input.toString === 'function') {
+-            input = input.toString();
+-          } else {
+-            input = '[object Object]';
+-          }
+-        } else if (input === null || typeof input === 'undefined' || isNaN(input) && !input.length) {
+-          input = '';
+-        }
+-        return String(input);
+-      }
+-
+-      function contains(str, elem) {
+-        assertString(str);
+-        return str.indexOf(toString(elem)) >= 0;
+-      }
+-
+-      function matches(str, pattern, modifiers) {
+-        assertString(str);
+-        if (Object.prototype.toString.call(pattern) !== '[object RegExp]') {
+-          pattern = new RegExp(pattern, modifiers);
+-        }
+-        return pattern.test(str);
+-      }
+-
+-      function merge() {
+-        var obj = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+-        var defaults = arguments[1];
+-
+-        for (var key in defaults) {
+-          if (typeof obj[key] === 'undefined') {
+-            obj[key] = defaults[key];
+-          }
+-        }
+-        return obj;
+-      }
+-
+-      /* eslint-disable prefer-rest-params */
+-      function isByteLength(str, options) {
+-        assertString(str);
+-        var min = void 0;
+-        var max = void 0;
+-        if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) === 'object') {
+-          min = options.min || 0;
+-          max = options.max;
+-        } else {
+-          // backwards compatibility: isByteLength(str, min [, max])
+-          min = arguments[1];
+-          max = arguments[2];
+-        }
+-        var len = encodeURI(str).split(/%..|./).length - 1;
+-        return len >= min && (typeof max === 'undefined' || len <= max);
+-      }
+-
+-      var default_fqdn_options = {
+-        require_tld: true,
+-        allow_underscores: false,
+-        allow_trailing_dot: false
+-      };
+-
+-      function isFDQN(str, options) {
+-        assertString(str);
+-        options = merge(options, default_fqdn_options);
+-
+-        /* Remove the optional trailing dot before checking validity */
+-        if (options.allow_trailing_dot && str[str.length - 1] === '.') {
+-          str = str.substring(0, str.length - 1);
+-        }
+-        var parts = str.split('.');
+-        if (options.require_tld) {
+-          var tld = parts.pop();
+-          if (!parts.length || !/^([a-z\u00a1-\uffff]{2,}|xn[a-z0-9-]{2,})$/i.test(tld)) {
+-            return false;
+-          }
+-        }
+-        for (var part, i = 0; i < parts.length; i++) {
+-          part = parts[i];
+-          if (options.allow_underscores) {
+-            part = part.replace(/_/g, '');
+-          }
+-          if (!/^[a-z\u00a1-\uffff0-9-]+$/i.test(part)) {
+-            return false;
+-          }
+-          if (/[\uff01-\uff5e]/.test(part)) {
+-            // disallow full-width chars
+-            return false;
+-          }
+-          if (part[0] === '-' || part[part.length - 1] === '-') {
+-            return false;
+-          }
+-        }
+-        return true;
+-      }
+-
+-      var default_email_options = {
+-        allow_display_name: false,
+-        require_display_name: false,
+-        allow_utf8_local_part: true,
+-        require_tld: true
+-      };
+-
+-      /* eslint-disable max-len */
+-      /* eslint-disable no-control-regex */
+-      var displayName = /^[a-z\d!#\$%&'\*\+\-\/=\?\^_`{\|}~\.\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]+[a-z\d!#\$%&'\*\+\-\/=\?\^_`{\|}~\.\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF\s]*<(.+)>$/i;
+-      var emailUserPart = /^[a-z\d!#\$%&'\*\+\-\/=\?\^_`{\|}~]+$/i;
+-      var quotedEmailUser = /^([\s\x01-\x08\x0b\x0c\x0e-\x1f\x7f\x21\x23-\x5b\x5d-\x7e]|(\\[\x01-\x09\x0b\x0c\x0d-\x7f]))*$/i;
+-      var emailUserUtf8Part = /^[a-z\d!#\$%&'\*\+\-\/=\?\^_`{\|}~\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]+$/i;
+-      var quotedEmailUserUtf8 = /^([\s\x01-\x08\x0b\x0c\x0e-\x1f\x7f\x21\x23-\x5b\x5d-\x7e\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]|(\\[\x01-\x09\x0b\x0c\x0d-\x7f\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))*$/i;
+-      /* eslint-enable max-len */
+-      /* eslint-enable no-control-regex */
+-
+-      function isEmail(str, options) {
+-        assertString(str);
+-        options = merge(options, default_email_options);
+-
+-        if (options.require_display_name || options.allow_display_name) {
+-          var display_email = str.match(displayName);
+-          if (display_email) {
+-            str = display_email[1];
+-          } else if (options.require_display_name) {
+-            return false;
+-          }
+-        }
+-
+-        var parts = str.split('@');
+-        var domain = parts.pop();
+-        var user = parts.join('@');
+-
+-        var lower_domain = domain.toLowerCase();
+-        if (lower_domain === 'gmail.com' || lower_domain === 'googlemail.com') {
+-          user = user.replace(/\./g, '').toLowerCase();
+-        }
+-
+-        if (!isByteLength(user, { max: 64 }) || !isByteLength(domain, { max: 256 })) {
+-          return false;
+-        }
+-
+-        if (!isFDQN(domain, { require_tld: options.require_tld })) {
+-          return false;
+-        }
+-
+-        if (user[0] === '"') {
+-          user = user.slice(1, user.length - 1);
+-          return options.allow_utf8_local_part ? quotedEmailUserUtf8.test(user) : quotedEmailUser.test(user);
+-        }
+-
+-        var pattern = options.allow_utf8_local_part ? emailUserUtf8Part : emailUserPart;
+-
+-        var user_parts = user.split('.');
+-        for (var i = 0; i < user_parts.length; i++) {
+-          if (!pattern.test(user_parts[i])) {
+-            return false;
+-          }
+-        }
+-
+-        return true;
+-      }
+-
+-      var ipv4Maybe = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+-      var ipv6Block = /^[0-9A-F]{1,4}$/i;
+-
+-      function isIP(str) {
+-        var version = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : '';
+-
+-        assertString(str);
+-        version = String(version);
+-        if (!version) {
+-          return isIP(str, 4) || isIP(str, 6);
+-        } else if (version === '4') {
+-          if (!ipv4Maybe.test(str)) {
+-            return false;
+-          }
+-          var parts = str.split('.').sort(function (a, b) {
+-            return a - b;
+-          });
+-          return parts[3] <= 255;
+-        } else if (version === '6') {
+-          var blocks = str.split(':');
+-          var foundOmissionBlock = false; // marker to indicate ::
+-
+-          // At least some OS accept the last 32 bits of an IPv6 address
+-          // (i.e. 2 of the blocks) in IPv4 notation, and RFC 3493 says
+-          // that '::ffff:a.b.c.d' is valid for IPv4-mapped IPv6 addresses,
+-          // and '::a.b.c.d' is deprecated, but also valid.
+-          var foundIPv4TransitionBlock = isIP(blocks[blocks.length - 1], 4);
+-          var expectedNumberOfBlocks = foundIPv4TransitionBlock ? 7 : 8;
+-
+-          if (blocks.length > expectedNumberOfBlocks) {
+-            return false;
+-          }
+-          // initial or final ::
+-          if (str === '::') {
+-            return true;
+-          } else if (str.substr(0, 2) === '::') {
+-            blocks.shift();
+-            blocks.shift();
+-            foundOmissionBlock = true;
+-          } else if (str.substr(str.length - 2) === '::') {
+-            blocks.pop();
+-            blocks.pop();
+-            foundOmissionBlock = true;
+-          }
+-
+-          for (var i = 0; i < blocks.length; ++i) {
+-            // test for a :: which can not be at the string start/end
+-            // since those cases have been handled above
+-            if (blocks[i] === '' && i > 0 && i < blocks.length - 1) {
+-              if (foundOmissionBlock) {
+-                return false; // multiple :: in address
+-              }
+-              foundOmissionBlock = true;
+-            } else if (foundIPv4TransitionBlock && i === blocks.length - 1) {
+-              // it has been checked before that the last
+-              // block is a valid IPv4 address
+-            } else if (!ipv6Block.test(blocks[i])) {
+-              return false;
+-            }
+-          }
+-          if (foundOmissionBlock) {
+-            return blocks.length >= 1;
+-          }
+-          return blocks.length === expectedNumberOfBlocks;
+-        }
+-        return false;
+-      }
+-
+-      var default_url_options = {
+-        protocols: ['http', 'https', 'ftp'],
+-        require_tld: true,
+-        require_protocol: false,
+-        require_host: true,
+-        require_valid_protocol: true,
+-        allow_underscores: false,
+-        allow_trailing_dot: false,
+-        allow_protocol_relative_urls: false
+-      };
+-
+-      var wrapped_ipv6 = /^\[([^\]]+)\](?::([0-9]+))?$/;
+-
+-      function isRegExp(obj) {
+-        return Object.prototype.toString.call(obj) === '[object RegExp]';
+-      }
+-
+-      function checkHost(host, matches) {
+-        for (var i = 0; i < matches.length; i++) {
+-          var match = matches[i];
+-          if (host === match || isRegExp(match) && match.test(host)) {
+-            return true;
+-          }
+-        }
+-        return false;
+-      }
+-
+-      function isURL(url, options) {
+-        assertString(url);
+-        if (!url || url.length >= 2083 || /[\s<>]/.test(url)) {
+-          return false;
+-        }
+-        if (url.indexOf('mailto:') === 0) {
+-          return false;
+-        }
+-        options = merge(options, default_url_options);
+-        var protocol = void 0,
+-            auth = void 0,
+-            host = void 0,
+-            hostname = void 0,
+-            port = void 0,
+-            port_str = void 0,
+-            split = void 0,
+-            ipv6 = void 0;
+-
+-        split = url.split('#');
+-        url = split.shift();
+-
+-        split = url.split('?');
+-        url = split.shift();
+-
+-        split = url.split('://');
+-        if (split.length > 1) {
+-          protocol = split.shift();
+-          if (options.require_valid_protocol && options.protocols.indexOf(protocol) === -1) {
+-            return false;
+-          }
+-        } else if (options.require_protocol) {
+-          return false;
+-        } else if (options.allow_protocol_relative_urls && url.substr(0, 2) === '//') {
+-          split[0] = url.substr(2);
+-        }
+-        url = split.join('://');
+-
+-        split = url.split('/');
+-        url = split.shift();
+-
+-        if (url === '' && !options.require_host) {
+-          return true;
+-        }
+-
+-        split = url.split('@');
+-        if (split.length > 1) {
+-          auth = split.shift();
+-          if (auth.indexOf(':') >= 0 && auth.split(':').length > 2) {
+-            return false;
+-          }
+-        }
+-        hostname = split.join('@');
+-
+-        port_str = ipv6 = null;
+-        var ipv6_match = hostname.match(wrapped_ipv6);
+-        if (ipv6_match) {
+-          host = '';
+-          ipv6 = ipv6_match[1];
+-          port_str = ipv6_match[2] || null;
+-        } else {
+-          split = hostname.split(':');
+-          host = split.shift();
+-          if (split.length) {
+-            port_str = split.join(':');
+-          }
+-        }
+-
+-        if (port_str !== null) {
+-          port = parseInt(port_str, 10);
+-          if (!/^[0-9]+$/.test(port_str) || port <= 0 || port > 65535) {
+-            return false;
+-          }
+-        }
+-
+-        if (!isIP(host) && !isFDQN(host, options) && (!ipv6 || !isIP(ipv6, 6)) && host !== 'localhost') {
+-          return false;
+-        }
+-
+-        host = host || ipv6;
+-
+-        if (options.host_whitelist && !checkHost(host, options.host_whitelist)) {
+-          return false;
+-        }
+-        if (options.host_blacklist && checkHost(host, options.host_blacklist)) {
+-          return false;
+-        }
+-
+-        return true;
+-      }
+-
+-      var macAddress = /^([0-9a-fA-F][0-9a-fA-F]:){5}([0-9a-fA-F][0-9a-fA-F])$/;
+-
+-      function isMACAddress(str) {
+-        assertString(str);
+-        return macAddress.test(str);
+-      }
+-
+-      function isBoolean(str) {
+-        assertString(str);
+-        return ['true', 'false', '1', '0'].indexOf(str) >= 0;
+-      }
+-
+-      var alpha = {
+-        'en-US': /^[A-Z]+$/i,
+-        'cs-CZ': /^[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]+$/i,
+-        'da-DK': /^[A-ZÆØÅ]+$/i,
+-        'de-DE': /^[A-ZÄÖÜß]+$/i,
+-        'es-ES': /^[A-ZÁÉÍÑÓÚÜ]+$/i,
+-        'fr-FR': /^[A-ZÀÂÆÇÉÈÊËÏÎÔŒÙÛÜŸ]+$/i,
+-        'nl-NL': /^[A-ZÉËÏÓÖÜ]+$/i,
+-        'hu-HU': /^[A-ZÁÉÍÓÖŐÚÜŰ]+$/i,
+-        'pl-PL': /^[A-ZĄĆĘŚŁŃÓŻŹ]+$/i,
+-        'pt-PT': /^[A-ZÃÁÀÂÇÉÊÍÕÓÔÚÜ]+$/i,
+-        'ru-RU': /^[А-ЯЁ]+$/i,
+-        'sr-RS@latin': /^[A-ZČĆŽŠĐ]+$/i,
+-        'sr-RS': /^[А-ЯЂЈЉЊЋЏ]+$/i,
+-        'tr-TR': /^[A-ZÇĞİıÖŞÜ]+$/i,
+-        'uk-UA': /^[А-ЩЬЮЯЄIЇҐ]+$/i,
+-        ar: /^[ءآأؤإئابةتثجحخدذرزسشصضطظعغفقكلمنهوىيًٌٍَُِّْٰ]+$/
+-      };
+-
+-      var alphanumeric = {
+-        'en-US': /^[0-9A-Z]+$/i,
+-        'cs-CZ': /^[0-9A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]+$/i,
+-        'da-DK': /^[0-9A-ZÆØÅ]$/i,
+-        'de-DE': /^[0-9A-ZÄÖÜß]+$/i,
+-        'es-ES': /^[0-9A-ZÁÉÍÑÓÚÜ]+$/i,
+-        'fr-FR': /^[0-9A-ZÀÂÆÇÉÈÊËÏÎÔŒÙÛÜŸ]+$/i,
+-        'hu-HU': /^[0-9A-ZÁÉÍÓÖŐÚÜŰ]+$/i,
+-        'nl-NL': /^[0-9A-ZÉËÏÓÖÜ]+$/i,
+-        'pl-PL': /^[0-9A-ZĄĆĘŚŁŃÓŻŹ]+$/i,
+-        'pt-PT': /^[0-9A-ZÃÁÀÂÇÉÊÍÕÓÔÚÜ]+$/i,
+-        'ru-RU': /^[0-9А-ЯЁ]+$/i,
+-        'sr-RS@latin': /^[0-9A-ZČĆŽŠĐ]+$/i,
+-        'sr-RS': /^[0-9А-ЯЂЈЉЊЋЏ]+$/i,
+-        'tr-TR': /^[0-9A-ZÇĞİıÖŞÜ]+$/i,
+-        'uk-UA': /^[0-9А-ЩЬЮЯЄIЇҐ]+$/i,
+-        ar: /^[٠١٢٣٤٥٦٧٨٩0-9ءآأؤإئابةتثجحخدذرزسشصضطظعغفقكلمنهوىيًٌٍَُِّْٰ]+$/
+-      };
+-
+-      var englishLocales = ['AU', 'GB', 'HK', 'IN', 'NZ', 'ZA', 'ZM'];
+-
+-      for (var locale, i = 0; i < englishLocales.length; i++) {
+-        locale = 'en-' + englishLocales[i];
+-        alpha[locale] = alpha['en-US'];
+-        alphanumeric[locale] = alphanumeric['en-US'];
+-      }
+-
+-      alpha['pt-BR'] = alpha['pt-PT'];
+-      alphanumeric['pt-BR'] = alphanumeric['pt-PT'];
+-
+-      // Source: http://www.localeplanet.com/java/
+-      var arabicLocales = ['AE', 'BH', 'DZ', 'EG', 'IQ', 'JO', 'KW', 'LB', 'LY', 'MA', 'QM', 'QA', 'SA', 'SD', 'SY', 'TN', 'YE'];
+-
+-      for (var _locale, _i = 0; _i < arabicLocales.length; _i++) {
+-        _locale = 'ar-' + arabicLocales[_i];
+-        alpha[_locale] = alpha.ar;
+-        alphanumeric[_locale] = alphanumeric.ar;
+-      }
+-
+-      function isAlpha(str) {
+-        var locale = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 'en-US';
+-
+-        assertString(str);
+-        if (locale in alpha) {
+-          return alpha[locale].test(str);
+-        }
+-        throw new Error('Invalid locale \'' + locale + '\'');
+-      }
+-
+-      function isAlphanumeric(str) {
+-        var locale = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 'en-US';
+-
+-        assertString(str);
+-        if (locale in alphanumeric) {
+-          return alphanumeric[locale].test(str);
+-        }
+-        throw new Error('Invalid locale \'' + locale + '\'');
+-      }
+-
+-      var numeric = /^[-+]?[0-9]+$/;
+-
+-      function isNumeric(str) {
+-        assertString(str);
+-        return numeric.test(str);
+-      }
+-
+-      function isLowercase(str) {
+-        assertString(str);
+-        return str === str.toLowerCase();
+-      }
+-
+-      function isUppercase(str) {
+-        assertString(str);
+-        return str === str.toUpperCase();
+-      }
+-
+-      /* eslint-disable no-control-regex */
+-      var ascii = /^[\x00-\x7F]+$/;
+-      /* eslint-enable no-control-regex */
+-
+-      function isAscii(str) {
+-        assertString(str);
+-        return ascii.test(str);
+-      }
+-
+-      var fullWidth = /[^\u0020-\u007E\uFF61-\uFF9F\uFFA0-\uFFDC\uFFE8-\uFFEE0-9a-zA-Z]/;
+-
+-      function isFullWidth(str) {
+-        assertString(str);
+-        return fullWidth.test(str);
+-      }
+-
+-      var halfWidth = /[\u0020-\u007E\uFF61-\uFF9F\uFFA0-\uFFDC\uFFE8-\uFFEE0-9a-zA-Z]/;
+-
+-      function isHalfWidth(str) {
+-        assertString(str);
+-        return halfWidth.test(str);
+-      }
+-
+-      function isVariableWidth(str) {
+-        assertString(str);
+-        return fullWidth.test(str) && halfWidth.test(str);
+-      }
+-
+-      /* eslint-disable no-control-regex */
+-      var multibyte = /[^\x00-\x7F]/;
+-      /* eslint-enable no-control-regex */
+-
+-      function isMultibyte(str) {
+-        assertString(str);
+-        return multibyte.test(str);
+-      }
+-
+-      var surrogatePair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/;
+-
+-      function isSurrogatePair(str) {
+-        assertString(str);
+-        return surrogatePair.test(str);
+-      }
+-
+-      var int = /^(?:[-+]?(?:0|[1-9][0-9]*))$/;
+-      var intLeadingZeroes = /^[-+]?[0-9]+$/;
+-
+-      function isInt(str, options) {
+-        assertString(str);
+-        options = options || {};
+-
+-        // Get the regex to use for testing, based on whether
+-        // leading zeroes are allowed or not.
+-        var regex = options.hasOwnProperty('allow_leading_zeroes') && !options.allow_leading_zeroes ? int : intLeadingZeroes;
+-
+-        // Check min/max/lt/gt
+-        var minCheckPassed = !options.hasOwnProperty('min') || str >= options.min;
+-        var maxCheckPassed = !options.hasOwnProperty('max') || str <= options.max;
+-        var ltCheckPassed = !options.hasOwnProperty('lt') || str < options.lt;
+-        var gtCheckPassed = !options.hasOwnProperty('gt') || str > options.gt;
+-
+-        return regex.test(str) && minCheckPassed && maxCheckPassed && ltCheckPassed && gtCheckPassed;
+-      }
+-
+-      var float = /^(?:[-+])?(?:[0-9]+)?(?:\.[0-9]*)?(?:[eE][\+\-]?(?:[0-9]+))?$/;
+-
+-      function isFloat(str, options) {
+-        assertString(str);
+-        options = options || {};
+-        if (str === '' || str === '.') {
+-          return false;
+-        }
+-        return float.test(str) && (!options.hasOwnProperty('min') || str >= options.min) && (!options.hasOwnProperty('max') || str <= options.max) && (!options.hasOwnProperty('lt') || str < options.lt) && (!options.hasOwnProperty('gt') || str > options.gt);
+-      }
+-
+-      var decimal = /^[-+]?([0-9]+|\.[0-9]+|[0-9]+\.[0-9]+)$/;
+-
+-      function isDecimal(str) {
+-        assertString(str);
+-        return str !== '' && decimal.test(str);
+-      }
+-
+-      var hexadecimal = /^[0-9A-F]+$/i;
+-
+-      function isHexadecimal(str) {
+-        assertString(str);
+-        return hexadecimal.test(str);
+-      }
+-
+-      function isDivisibleBy(str, num) {
+-        assertString(str);
+-        return toFloat(str) % parseInt(num, 10) === 0;
+-      }
+-
+-      var hexcolor = /^#?([0-9A-F]{3}|[0-9A-F]{6})$/i;
+-
+-      function isHexColor(str) {
+-        assertString(str);
+-        return hexcolor.test(str);
+-      }
+-
+-      var md5 = /^[a-f0-9]{32}$/;
+-
+-      function isMD5(str) {
+-        assertString(str);
+-        return md5.test(str);
+-      }
+-
+-      function isJSON(str) {
+-        assertString(str);
+-        try {
+-          var obj = JSON.parse(str);
+-          return !!obj && (typeof obj === 'undefined' ? 'undefined' : _typeof(obj)) === 'object';
+-        } catch (e) {/* ignore */}
+-        return false;
+-      }
+-
+-      function isEmpty(str) {
+-        assertString(str);
+-        return str.length === 0;
+-      }
+-
+-      /* eslint-disable prefer-rest-params */
+-      function isLength(str, options) {
+-        assertString(str);
+-        var min = void 0;
+-        var max = void 0;
+-        if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) === 'object') {
+-          min = options.min || 0;
+-          max = options.max;
+-        } else {
+-          // backwards compatibility: isLength(str, min [, max])
+-          min = arguments[1];
+-          max = arguments[2];
+-        }
+-        var surrogatePairs = str.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || [];
+-        var len = str.length - surrogatePairs.length;
+-        return len >= min && (typeof max === 'undefined' || len <= max);
+-      }
+-
+-      var uuid = {
+-        3: /^[0-9A-F]{8}-[0-9A-F]{4}-3[0-9A-F]{3}-[0-9A-F]{4}-[0-9A-F]{12}$/i,
+-        4: /^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i,
+-        5: /^[0-9A-F]{8}-[0-9A-F]{4}-5[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i,
+-        all: /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i
+-      };
+-
+-      function isUUID(str) {
+-        var version = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 'all';
+-
+-        assertString(str);
+-        var pattern = uuid[version];
+-        return pattern && pattern.test(str);
+-      }
+-
+-      function isMongoId(str) {
+-        assertString(str);
+-        return isHexadecimal(str) && str.length === 24;
+-      }
+-
+-      function isAfter(str) {
+-        var date = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : String(new Date());
+-
+-        assertString(str);
+-        var comparison = toDate(date);
+-        var original = toDate(str);
+-        return !!(original && comparison && original > comparison);
+-      }
+-
+-      function isBefore(str) {
+-        var date = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : String(new Date());
+-
+-        assertString(str);
+-        var comparison = toDate(date);
+-        var original = toDate(str);
+-        return !!(original && comparison && original < comparison);
+-      }
+-
+-      function isIn(str, options) {
+-        assertString(str);
+-        var i = void 0;
+-        if (Object.prototype.toString.call(options) === '[object Array]') {
+-          var array = [];
+-          for (i in options) {
+-            if ({}.hasOwnProperty.call(options, i)) {
+-              array[i] = toString(options[i]);
+-            }
+-          }
+-          return array.indexOf(str) >= 0;
+-        } else if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) === 'object') {
+-          return options.hasOwnProperty(str);
+-        } else if (options && typeof options.indexOf === 'function') {
+-          return options.indexOf(str) >= 0;
+-        }
+-        return false;
+-      }
+-
+-      /* eslint-disable max-len */
+-      var creditCard = /^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|(222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\d{3})\d{11})|62[0-9]{14}$/;
+-      /* eslint-enable max-len */
+-
+-      function isCreditCard(str) {
+-        assertString(str);
+-        var sanitized = str.replace(/[^0-9]+/g, '');
+-        if (!creditCard.test(sanitized)) {
+-          return false;
+-        }
+-        var sum = 0;
+-        var digit = void 0;
+-        var tmpNum = void 0;
+-        var shouldDouble = void 0;
+-        for (var i = sanitized.length - 1; i >= 0; i--) {
+-          digit = sanitized.substring(i, i + 1);
+-          tmpNum = parseInt(digit, 10);
+-          if (shouldDouble) {
+-            tmpNum *= 2;
+-            if (tmpNum >= 10) {
+-              sum += tmpNum % 10 + 1;
+-            } else {
+-              sum += tmpNum;
+-            }
+-          } else {
+-            sum += tmpNum;
+-          }
+-          shouldDouble = !shouldDouble;
+-        }
+-        return !!(sum % 10 === 0 ? sanitized : false);
+-      }
+-
+-      var isin = /^[A-Z]{2}[0-9A-Z]{9}[0-9]$/;
+-
+-      function isISIN(str) {
+-        assertString(str);
+-        if (!isin.test(str)) {
+-          return false;
+-        }
+-
+-        var checksumStr = str.replace(/[A-Z]/g, function (character) {
+-          return parseInt(character, 36);
+-        });
+-
+-        var sum = 0;
+-        var digit = void 0;
+-        var tmpNum = void 0;
+-        var shouldDouble = true;
+-        for (var i = checksumStr.length - 2; i >= 0; i--) {
+-          digit = checksumStr.substring(i, i + 1);
+-          tmpNum = parseInt(digit, 10);
+-          if (shouldDouble) {
+-            tmpNum *= 2;
+-            if (tmpNum >= 10) {
+-              sum += tmpNum + 1;
+-            } else {
+-              sum += tmpNum;
+-            }
+-          } else {
+-            sum += tmpNum;
+-          }
+-          shouldDouble = !shouldDouble;
+-        }
+-
+-        return parseInt(str.substr(str.length - 1), 10) === (10000 - sum) % 10;
+-      }
+-
+-      var isbn10Maybe = /^(?:[0-9]{9}X|[0-9]{10})$/;
+-      var isbn13Maybe = /^(?:[0-9]{13})$/;
+-      var factor = [1, 3];
+-
+-      function isISBN(str) {
+-        var version = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : '';
+-
+-        assertString(str);
+-        version = String(version);
+-        if (!version) {
+-          return isISBN(str, 10) || isISBN(str, 13);
+-        }
+-        var sanitized = str.replace(/[\s-]+/g, '');
+-        var checksum = 0;
+-        var i = void 0;
+-        if (version === '10') {
+-          if (!isbn10Maybe.test(sanitized)) {
+-            return false;
+-          }
+-          for (i = 0; i < 9; i++) {
+-            checksum += (i + 1) * sanitized.charAt(i);
+-          }
+-          if (sanitized.charAt(9) === 'X') {
+-            checksum += 10 * 10;
+-          } else {
+-            checksum += 10 * sanitized.charAt(9);
+-          }
+-          if (checksum % 11 === 0) {
+-            return !!sanitized;
+-          }
+-        } else if (version === '13') {
+-          if (!isbn13Maybe.test(sanitized)) {
+-            return false;
+-          }
+-          for (i = 0; i < 12; i++) {
+-            checksum += factor[i % 2] * sanitized.charAt(i);
+-          }
+-          if (sanitized.charAt(12) - (10 - checksum % 10) % 10 === 0) {
+-            return !!sanitized;
+-          }
+-        }
+-        return false;
+-      }
+-
+-      var issn = '^\\d{4}-?\\d{3}[\\dX]$';
+-
+-      function isISSN(str) {
+-        var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+-
+-        assertString(str);
+-        var testIssn = issn;
+-        testIssn = options.require_hyphen ? testIssn.replace('?', '') : testIssn;
+-        testIssn = options.case_sensitive ? new RegExp(testIssn) : new RegExp(testIssn, 'i');
+-        if (!testIssn.test(str)) {
+-          return false;
+-        }
+-        var issnDigits = str.replace('-', '');
+-        var position = 8;
+-        var checksum = 0;
+-        var _iteratorNormalCompletion = true;
+-        var _didIteratorError = false;
+-        var _iteratorError = undefined;
+-
+-        try {
+-          for (var _iterator = issnDigits[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+-            var digit = _step.value;
+-
+-            var digitValue = digit.toUpperCase() === 'X' ? 10 : +digit;
+-            checksum += digitValue * position;
+-            --position;
+-          }
+-        } catch (err) {
+-          _didIteratorError = true;
+-          _iteratorError = err;
+-        } finally {
+-          try {
+-            if (!_iteratorNormalCompletion && _iterator.return) {
+-              _iterator.return();
+-            }
+-          } finally {
+-            if (_didIteratorError) {
+-              throw _iteratorError;
+-            }
+-          }
+-        }
+-
+-        return checksum % 11 === 0;
+-      }
+-
+-      /* eslint-disable max-len */
+-      var phones = {
+-        'ar-DZ': /^(\+?213|0)(5|6|7)\d{8}$/,
+-        'ar-SY': /^(!?(\+?963)|0)?9\d{8}$/,
+-        'ar-SA': /^(!?(\+?966)|0)?5\d{8}$/,
+-        'en-US': /^(\+?1)?[2-9]\d{2}[2-9](?!11)\d{6}$/,
+-        'cs-CZ': /^(\+?420)? ?[1-9][0-9]{2} ?[0-9]{3} ?[0-9]{3}$/,
+-        'de-DE': /^(\+?49[ \.\-])?([\(]{1}[0-9]{1,6}[\)])?([0-9 \.\-\/]{3,20})((x|ext|extension)[ ]?[0-9]{1,4})?$/,
+-        'da-DK': /^(\+?45)?(\d{8})$/,
+-        'el-GR': /^(\+?30)?(69\d{8})$/,
+-        'en-AU': /^(\+?61|0)4\d{8}$/,
+-        'en-GB': /^(\+?44|0)7\d{9}$/,
+-        // According to http://www.ofca.gov.hk/filemanager/ofca/en/content_311/no_plan.pdf
+-        'en-HK': /^(\+?852-?)?((4(04[01]|06\d|09[3-9]|20\d|2[2-9]\d|3[3-9]\d|[467]\d{2}|5[1-9]\d|81\d|82[1-9]|8[69]\d|92[3-9]|95[2-9]|98\d)|5([1-79]\d{2})|6(0[1-9]\d|[1-9]\d{2})|7(0[1-9]\d|10[4-79]|11[458]|1[24578]\d|13[24-9]|16[0-8]|19[24579]|21[02-79]|2[456]\d|27[13-6]|3[456]\d|37[4578]|39[0146])|8(1[58]\d|2[45]\d|267|27[5-9]|2[89]\d|3[15-9]\d|32[5-8]|[46-9]\d{2}|5[013-9]\d)|9(0[1-9]\d|1[02-9]\d|[2-8]\d{2}))-?\d{4}|7130-?[0124-8]\d{3}|8167-?2\d{3})$/,
+-        'en-IN': /^(\+?91|0)?[789]\d{9}$/,
+-        'en-NG': /^(\+?234|0)?[789]\d{9}$/,
+-        'en-NZ': /^(\+?64|0)2\d{7,9}$/,
+-        'en-ZA': /^(\+?27|0)\d{9}$/,
+-        'en-ZM': /^(\+?26)?09[567]\d{7}$/,
+-        'es-ES': /^(\+?34)?(6\d{1}|7[1234])\d{7}$/,
+-        'fi-FI': /^(\+?358|0)\s?(4(0|1|2|4|5)?|50)\s?(\d\s?){4,8}\d$/,
+-        'fr-FR': /^(\+?33|0)[67]\d{8}$/,
+-        'he-IL': /^(\+972|0)([23489]|5[0248]|77)[1-9]\d{6}/,
+-        'hu-HU': /^(\+?36)(20|30|70)\d{7}$/,
+-        'lt-LT': /^(\+370|8)\d{8}$/,
+-        'id-ID': /^(\+?62|0[1-9])[\s|\d]+$/,
+-        'it-IT': /^(\+?39)?\s?3\d{2} ?\d{6,7}$/,
+-        'ko-KR': /^((\+?82)[ \-]?)?0?1([0|1|6|7|8|9]{1})[ \-]?\d{3,4}[ \-]?\d{4}$/,
+-        'ja-JP': /^(\+?81|0)\d{1,4}[ \-]?\d{1,4}[ \-]?\d{4}$/,
+-        'ms-MY': /^(\+?6?01){1}(([145]{1}(\-|\s)?\d{7,8})|([236789]{1}(\s|\-)?\d{7}))$/,
+-        'nb-NO': /^(\+?47)?[49]\d{7}$/,
+-        'nl-BE': /^(\+?32|0)4?\d{8}$/,
+-        'nn-NO': /^(\+?47)?[49]\d{7}$/,
+-        'pl-PL': /^(\+?48)? ?[5-8]\d ?\d{3} ?\d{2} ?\d{2}$/,
+-        'pt-BR': /^(\+?55|0)\-?[1-9]{2}\-?[2-9]{1}\d{3,4}\-?\d{4}$/,
+-        'pt-PT': /^(\+?351)?9[1236]\d{7}$/,
+-        'ro-RO': /^(\+?4?0)\s?7\d{2}(\/|\s|\.|\-)?\d{3}(\s|\.|\-)?\d{3}$/,
+-        'en-PK': /^((\+92)|(0092))-{0,1}\d{3}-{0,1}\d{7}$|^\d{11}$|^\d{4}-\d{7}$/,
+-        'ru-RU': /^(\+?7|8)?9\d{9}$/,
+-        'sr-RS': /^(\+3816|06)[- \d]{5,9}$/,
+-        'tr-TR': /^(\+?90|0)?5\d{9}$/,
+-        'vi-VN': /^(\+?84|0)?((1(2([0-9])|6([2-9])|88|99))|(9((?!5)[0-9])))([0-9]{7})$/,
+-        'zh-CN': /^(\+?0?86\-?)?1[345789]\d{9}$/,
+-        'zh-TW': /^(\+?886\-?|0)?9\d{8}$/
+-      };
+-      /* eslint-enable max-len */
+-
+-      // aliases
+-      phones['en-CA'] = phones['en-US'];
+-      phones['fr-BE'] = phones['nl-BE'];
+-      phones['zh-HK'] = phones['en-HK'];
+-
+-      function isMobilePhone(str, locale) {
+-        assertString(str);
+-        if (locale in phones) {
+-          return phones[locale].test(str);
+-        } else if (locale === 'any') {
+-          return !!Object.values(phones).find(phone => phone.test(str));
+-        }
+-        return false;
+-      }
+-
+-      function currencyRegex(options) {
+-        var symbol = '(\\' + options.symbol.replace(/\./g, '\\.') + ')' + (options.require_symbol ? '' : '?'),
+-            negative = '-?',
+-            whole_dollar_amount_without_sep = '[1-9]\\d*',
+-            whole_dollar_amount_with_sep = '[1-9]\\d{0,2}(\\' + options.thousands_separator + '\\d{3})*',
+-            valid_whole_dollar_amounts = ['0', whole_dollar_amount_without_sep, whole_dollar_amount_with_sep],
+-            whole_dollar_amount = '(' + valid_whole_dollar_amounts.join('|') + ')?',
+-            decimal_amount = '(\\' + options.decimal_separator + '\\d{2})?';
+-        var pattern = whole_dollar_amount + decimal_amount;
+-
+-        // default is negative sign before symbol, but there are two other options (besides parens)
+-        if (options.allow_negatives && !options.parens_for_negatives) {
+-          if (options.negative_sign_after_digits) {
+-            pattern += negative;
+-          } else if (options.negative_sign_before_digits) {
+-            pattern = negative + pattern;
+-          }
+-        }
+-
+-        // South African Rand, for example, uses R 123 (space) and R-123 (no space)
+-        if (options.allow_negative_sign_placeholder) {
+-          pattern = '( (?!\\-))?' + pattern;
+-        } else if (options.allow_space_after_symbol) {
+-          pattern = ' ?' + pattern;
+-        } else if (options.allow_space_after_digits) {
+-          pattern += '( (?!$))?';
+-        }
+-
+-        if (options.symbol_after_digits) {
+-          pattern += symbol;
+-        } else {
+-          pattern = symbol + pattern;
+-        }
+-
+-        if (options.allow_negatives) {
+-          if (options.parens_for_negatives) {
+-            pattern = '(\\(' + pattern + '\\)|' + pattern + ')';
+-          } else if (!(options.negative_sign_before_digits || options.negative_sign_after_digits)) {
+-            pattern = negative + pattern;
+-          }
+-        }
+-
+-        /* eslint-disable prefer-template */
+-        return new RegExp('^' +
+-        // ensure there's a dollar and/or decimal amount, and that
+-        // it doesn't start with a space or a negative sign followed by a space
+-        '(?!-? )(?=.*\\d)' + pattern + '$');
+-        /* eslint-enable prefer-template */
+-      }
+-
+-      var default_currency_options = {
+-        symbol: '$',
+-        require_symbol: false,
+-        allow_space_after_symbol: false,
+-        symbol_after_digits: false,
+-        allow_negatives: true,
+-        parens_for_negatives: false,
+-        negative_sign_before_digits: false,
+-        negative_sign_after_digits: false,
+-        allow_negative_sign_placeholder: false,
+-        thousands_separator: ',',
+-        decimal_separator: '.',
+-        allow_space_after_digits: false
+-      };
+-
+-      function isCurrency(str, options) {
+-        assertString(str);
+-        options = merge(options, default_currency_options);
+-        return currencyRegex(options).test(str);
+-      }
+-
+-      /* eslint-disable max-len */
+-      // from http://goo.gl/0ejHHW
+-      var iso8601 = /^([\+-]?\d{4}(?!\d{2}\b))((-?)((0[1-9]|1[0-2])(\3([12]\d|0[1-9]|3[01]))?|W([0-4]\d|5[0-2])(-?[1-7])?|(00[1-9]|0[1-9]\d|[12]\d{2}|3([0-5]\d|6[1-6])))([T\s]((([01]\d|2[0-3])((:?)[0-5]\d)?|24:?00)([\.,]\d+(?!:))?)?(\17[0-5]\d([\.,]\d+)?)?([zZ]|([\+-])([01]\d|2[0-3]):?([0-5]\d)?)?)?)?$/;
+-      /* eslint-enable max-len */
+-
+-      function isISO8601 (str) {
+-        assertString(str);
+-        return iso8601.test(str);
+-      }
+-
+-      function isBase64(str) {
+-        assertString(str);
+-        // Value length must be divisible by 4.
+-        var len = str.length;
+-        if (!len || len % 4 !== 0) {
+-          return false;
+-        }
+-
+-        try {
+-          if (atob(str)) {
+-            return true;
+-          }
+-        } catch (e) {
+-          return false;
+-        }
+-      }
+-
+-      var dataURI = /^\s*data:([a-z]+\/[a-z0-9\-\+]+(;[a-z\-]+=[a-z0-9\-]+)?)?(;base64)?,[a-z0-9!\$&',\(\)\*\+,;=\-\._~:@\/\?%\s]*\s*$/i; // eslint-disable-line max-len
+-
+-      function isDataURI(str) {
+-        assertString(str);
+-        return dataURI.test(str);
+-      }
+-
+-      function ltrim(str, chars) {
+-        assertString(str);
+-        var pattern = chars ? new RegExp('^[' + chars + ']+', 'g') : /^\s+/g;
+-        return str.replace(pattern, '');
+-      }
+-
+-      function rtrim(str, chars) {
+-        assertString(str);
+-        var pattern = chars ? new RegExp('[' + chars + ']') : /\s/;
+-
+-        var idx = str.length - 1;
+-        while (idx >= 0 && pattern.test(str[idx])) {
+-          idx--;
+-        }
+-
+-        return idx < str.length ? str.substr(0, idx + 1) : str;
+-      }
+-
+-      function trim(str, chars) {
+-        return rtrim(ltrim(str, chars), chars);
+-      }
+-
+-      function escape(str) {
+-            assertString(str);
+-            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\//g, '&#x2F;').replace(/\\/g, '&#x5C;').replace(/`/g, '&#96;');
+-      }
+-
+-      function unescape(str) {
+-            assertString(str);
+-            return str.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x2F;/g, '/').replace(/&#96;/g, '`');
+-      }
+-
+-      function blacklist(str, chars) {
+-        assertString(str);
+-        return str.replace(new RegExp('[' + chars + ']+', 'g'), '');
+-      }
+-
+-      function stripLow(str, keep_new_lines) {
+-        assertString(str);
+-        var chars = keep_new_lines ? '\\x00-\\x09\\x0B\\x0C\\x0E-\\x1F\\x7F' : '\\x00-\\x1F\\x7F';
+-        return blacklist(str, chars);
+-      }
+-
+-      function whitelist(str, chars) {
+-        assertString(str);
+-        return str.replace(new RegExp('[^' + chars + ']+', 'g'), '');
+-      }
+-
+-      function isWhitelisted(str, chars) {
+-        assertString(str);
+-        for (var i = str.length - 1; i >= 0; i--) {
+-          if (chars.indexOf(str[i]) === -1) {
+-            return false;
+-          }
+-        }
+-        return true;
+-      }
+-
+-      var default_normalize_email_options = {
+-        // The following options apply to all email addresses
+-        // Lowercases the local part of the email address.
+-        // Please note this may violate RFC 5321 as per http://stackoverflow.com/a/9808332/192024).
+-        // The domain is always lowercased, as per RFC 1035
+-        all_lowercase: true,
+-
+-        // The following conversions are specific to GMail
+-        // Lowercases the local part of the GMail address (known to be case-insensitive)
+-        gmail_lowercase: true,
+-        // Removes dots from the local part of the email address, as that's ignored by GMail
+-        gmail_remove_dots: true,
+-        // Removes the subaddress (e.g. "+foo") from the email address
+-        gmail_remove_subaddress: true,
+-        // Conversts the googlemail.com domain to gmail.com
+-        gmail_convert_googlemaildotcom: true,
+-
+-        // The following conversions are specific to Outlook.com / Windows Live / Hotmail
+-        // Lowercases the local part of the Outlook.com address (known to be case-insensitive)
+-        outlookdotcom_lowercase: true,
+-        // Removes the subaddress (e.g. "+foo") from the email address
+-        outlookdotcom_remove_subaddress: true,
+-
+-        // The following conversions are specific to Yahoo
+-        // Lowercases the local part of the Yahoo address (known to be case-insensitive)
+-        yahoo_lowercase: true,
+-        // Removes the subaddress (e.g. "-foo") from the email address
+-        yahoo_remove_subaddress: true,
+-
+-        // The following conversions are specific to iCloud
+-        // Lowercases the local part of the iCloud address (known to be case-insensitive)
+-        icloud_lowercase: true,
+-        // Removes the subaddress (e.g. "+foo") from the email address
+-        icloud_remove_subaddress: true
+-      };
+-
+-      // List of domains used by iCloud
+-      var icloud_domains = ['icloud.com', 'me.com'];
+-
+-      // List of domains used by Outlook.com and its predecessors
+-      // This list is likely incomplete.
+-      // Partial reference:
+-      // https://blogs.office.com/2013/04/17/outlook-com-gets-two-step-verification-sign-in-by-alias-and-new-international-domains/
+-      var outlookdotcom_domains = ['hotmail.at', 'hotmail.be', 'hotmail.ca', 'hotmail.cl', 'hotmail.co.il', 'hotmail.co.nz', 'hotmail.co.th', 'hotmail.co.uk', 'hotmail.com', 'hotmail.com.ar', 'hotmail.com.au', 'hotmail.com.br', 'hotmail.com.gr', 'hotmail.com.mx', 'hotmail.com.pe', 'hotmail.com.tr', 'hotmail.com.vn', 'hotmail.cz', 'hotmail.de', 'hotmail.dk', 'hotmail.es', 'hotmail.fr', 'hotmail.hu', 'hotmail.id', 'hotmail.ie', 'hotmail.in', 'hotmail.it', 'hotmail.jp', 'hotmail.kr', 'hotmail.lv', 'hotmail.my', 'hotmail.ph', 'hotmail.pt', 'hotmail.sa', 'hotmail.sg', 'hotmail.sk', 'live.be', 'live.co.uk', 'live.com', 'live.com.ar', 'live.com.mx', 'live.de', 'live.es', 'live.eu', 'live.fr', 'live.it', 'live.nl', 'msn.com', 'outlook.at', 'outlook.be', 'outlook.cl', 'outlook.co.il', 'outlook.co.nz', 'outlook.co.th', 'outlook.com', 'outlook.com.ar', 'outlook.com.au', 'outlook.com.br', 'outlook.com.gr', 'outlook.com.pe', 'outlook.com.tr', 'outlook.com.vn', 'outlook.cz', 'outlook.de', 'outlook.dk', 'outlook.es', 'outlook.fr', 'outlook.hu', 'outlook.id', 'outlook.ie', 'outlook.in', 'outlook.it', 'outlook.jp', 'outlook.kr', 'outlook.lv', 'outlook.my', 'outlook.ph', 'outlook.pt', 'outlook.sa', 'outlook.sg', 'outlook.sk', 'passport.com'];
+-
+-      // List of domains used by Yahoo Mail
+-      // This list is likely incomplete
+-      var yahoo_domains = ['rocketmail.com', 'yahoo.ca', 'yahoo.co.uk', 'yahoo.com', 'yahoo.de', 'yahoo.fr', 'yahoo.in', 'yahoo.it', 'ymail.com'];
+-
+-      function normalizeEmail(email, options) {
+-        options = merge(options, default_normalize_email_options);
+-
+-        if (!isEmail(email)) {
+-          return false;
+-        }
+-
+-        var raw_parts = email.split('@');
+-        var domain = raw_parts.pop();
+-        var user = raw_parts.join('@');
+-        var parts = [user, domain];
+-
+-        // The domain is always lowercased, as it's case-insensitive per RFC 1035
+-        parts[1] = parts[1].toLowerCase();
+-
+-        if (parts[1] === 'gmail.com' || parts[1] === 'googlemail.com') {
+-          // Address is GMail
+-          if (options.gmail_remove_subaddress) {
+-            parts[0] = parts[0].split('+')[0];
+-          }
+-          if (options.gmail_remove_dots) {
+-            parts[0] = parts[0].replace(/\./g, '');
+-          }
+-          if (!parts[0].length) {
+-            return false;
+-          }
+-          if (options.all_lowercase || options.gmail_lowercase) {
+-            parts[0] = parts[0].toLowerCase();
+-          }
+-          parts[1] = options.gmail_convert_googlemaildotcom ? 'gmail.com' : parts[1];
+-        } else if (~icloud_domains.indexOf(parts[1])) {
+-          // Address is iCloud
+-          if (options.icloud_remove_subaddress) {
+-            parts[0] = parts[0].split('+')[0];
+-          }
+-          if (!parts[0].length) {
+-            return false;
+-          }
+-          if (options.all_lowercase || options.icloud_lowercase) {
+-            parts[0] = parts[0].toLowerCase();
+-          }
+-        } else if (~outlookdotcom_domains.indexOf(parts[1])) {
+-          // Address is Outlook.com
+-          if (options.outlookdotcom_remove_subaddress) {
+-            parts[0] = parts[0].split('+')[0];
+-          }
+-          if (!parts[0].length) {
+-            return false;
+-          }
+-          if (options.all_lowercase || options.outlookdotcom_lowercase) {
+-            parts[0] = parts[0].toLowerCase();
+-          }
+-        } else if (~yahoo_domains.indexOf(parts[1])) {
+-          // Address is Yahoo
+-          if (options.yahoo_remove_subaddress) {
+-            var components = parts[0].split('-');
+-            parts[0] = components.length > 1 ? components.slice(0, -1).join('-') : components[0];
+-          }
+-          if (!parts[0].length) {
+-            return false;
+-          }
+-          if (options.all_lowercase || options.yahoo_lowercase) {
+-            parts[0] = parts[0].toLowerCase();
+-          }
+-        } else if (options.all_lowercase) {
+-          // Any other address
+-          parts[0] = parts[0].toLowerCase();
+-        }
+-        return parts.join('@');
+-      }
+-
+-      // see http://isrc.ifpi.org/en/isrc-standard/code-syntax
+-      var isrc = /^[A-Z]{2}[0-9A-Z]{3}\d{2}\d{5}$/;
+-
+-      function isISRC(str) {
+-        assertString(str);
+-        return isrc.test(str);
+-      }
+-
+-      var cultureCodes = new Set(["ar", "bg", "ca", "zh-Hans", "cs", "da", "de",
+-      "el", "en", "es", "fi", "fr", "he", "hu", "is", "it", "ja", "ko", "nl", "no",
+-      "pl", "pt", "rm", "ro", "ru", "hr", "sk", "sq", "sv", "th", "tr", "ur", "id",
+-      "uk", "be", "sl", "et", "lv", "lt", "tg", "fa", "vi", "hy", "az", "eu", "hsb",
+-      "mk", "tn", "xh", "zu", "af", "ka", "fo", "hi", "mt", "se", "ga", "ms", "kk",
+-      "ky", "sw", "tk", "uz", "tt", "bn", "pa", "gu", "or", "ta", "te", "kn", "ml",
+-      "as", "mr", "sa", "mn", "bo", "cy", "km", "lo", "gl", "kok", "syr", "si", "iu",
+-      "am", "tzm", "ne", "fy", "ps", "fil", "dv", "ha", "yo", "quz", "nso", "ba", "lb",
+-      "kl", "ig", "ii", "arn", "moh", "br", "ug", "mi", "oc", "co", "gsw", "sah",
+-      "qut", "rw", "wo", "prs", "gd", "ar-SA", "bg-BG", "ca-ES", "zh-TW", "cs-CZ",
+-      "da-DK", "de-DE", "el-GR", "en-US", "fi-FI", "fr-FR", "he-IL", "hu-HU", "is-IS",
+-      "it-IT", "ja-JP", "ko-KR", "nl-NL", "nb-NO", "pl-PL", "pt-BR", "rm-CH", "ro-RO",
+-      "ru-RU", "hr-HR", "sk-SK", "sq-AL", "sv-SE", "th-TH", "tr-TR", "ur-PK", "id-ID",
+-      "uk-UA", "be-BY", "sl-SI", "et-EE", "lv-LV", "lt-LT", "tg-Cyrl-TJ", "fa-IR",
+-      "vi-VN", "hy-AM", "az-Latn-AZ", "eu-ES", "hsb-DE", "mk-MK", "tn-ZA", "xh-ZA",
+-      "zu-ZA", "af-ZA", "ka-GE", "fo-FO", "hi-IN", "mt-MT", "se-NO", "ms-MY", "kk-KZ",
+-      "ky-KG", "sw-KE", "tk-TM", "uz-Latn-UZ", "tt-RU", "bn-IN", "pa-IN", "gu-IN",
+-      "or-IN", "ta-IN", "te-IN", "kn-IN", "ml-IN", "as-IN", "mr-IN", "sa-IN", "mn-MN",
+-      "bo-CN", "cy-GB", "km-KH", "lo-LA", "gl-ES", "kok-IN", "syr-SY", "si-LK",
+-      "iu-Cans-CA", "am-ET", "ne-NP", "fy-NL", "ps-AF", "fil-PH", "dv-MV",
+-      "ha-Latn-NG", "yo-NG", "quz-BO", "nso-ZA", "ba-RU", "lb-LU", "kl-GL", "ig-NG",
+-      "ii-CN", "arn-CL", "moh-CA", "br-FR", "ug-CN", "mi-NZ", "oc-FR", "co-FR",
+-      "gsw-FR", "sah-RU", "qut-GT", "rw-RW", "wo-SN", "prs-AF", "gd-GB", "ar-IQ",
+-      "zh-CN", "de-CH", "en-GB", "es-MX", "fr-BE", "it-CH", "nl-BE", "nn-NO", "pt-PT",
+-      "sr-Latn-CS", "sv-FI", "az-Cyrl-AZ", "dsb-DE", "se-SE", "ga-IE", "ms-BN",
+-      "uz-Cyrl-UZ", "bn-BD", "mn-Mong-CN", "iu-Latn-CA", "tzm-Latn-DZ", "quz-EC",
+-      "ar-EG", "zh-HK", "de-AT", "en-AU", "es-ES", "fr-CA", "sr-Cyrl-CS", "se-FI",
+-      "quz-PE", "ar-LY", "zh-SG", "de-LU", "en-CA", "es-GT", "fr-CH", "hr-BA",
+-      "smj-NO", "ar-DZ", "zh-MO", "de-LI", "en-NZ", "es-CR", "fr-LU", "bs-Latn-BA",
+-      "smj-SE", "ar-MA", "en-IE", "es-PA", "fr-MC", "sr-Latn-BA", "sma-NO", "ar-TN",
+-      "en-ZA", "es-DO", "sr-Cyrl-BA", "sma-SE", "ar-OM", "en-JM", "es-VE",
+-      "bs-Cyrl-BA", "sms-FI", "ar-YE", "en-029", "es-CO", "sr-Latn-RS", "smn-FI",
+-      "ar-SY", "en-BZ", "es-PE", "sr-Cyrl-RS", "ar-JO", "en-TT", "es-AR", "sr-Latn-ME",
+-      "ar-LB", "en-ZW", "es-EC", "sr-Cyrl-ME", "ar-KW", "en-PH", "es-CL", "ar-AE",
+-      "es-UY", "ar-BH", "es-PY", "ar-QA", "en-IN", "es-BO", "en-MY", "es-SV", "en-SG",
+-      "es-HN", "es-NI", "es-PR", "es-US", "bs-Cyrl", "bs-Latn", "sr-Cyrl", "sr-Latn",
+-      "smn", "az-Cyrl", "sms", "zh", "nn", "bs", "az-Latn", "sma", "uz-Cyrl",
+-      "mn-Cyrl", "iu-Cans", "zh-Hant", "nb", "sr", "tg-Cyrl", "dsb", "smj", "uz-Latn",
+-      "mn-Mong", "iu-Latn", "tzm-Latn", "ha-Latn", "zh-CHS", "zh-CHT"]);
+-
+-      function isRFC5646(str) {
+-        assertString(str);
+-        // According to the spec these codes are case sensitive so we can check the
+-        // string directly.
+-        return cultureCodes.has(str);
+-      }
+-
+-      var semver =  /^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$/i
+-
+-      function isSemVer(str) {
+-        assertString(str);
+-        return semver.test(str);
+-      }
+-
+-      var rgbcolor =  /^rgb?\(\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*,\s*(0|[1-9]\d?|1\d\d?|2[0-4]\d|25[0-5])\s*\)$/i
+-
+-      function isRGBColor(str) {
+-        assertString(str);
+-        return rgbcolor.test(str);
+-      }
+-
+-      var version = '7.0.0';
+-
+-      var validator = {
+-        blacklist: blacklist,
+-        contains: contains,
+-        equals: equals,
+-        escape: escape,
+-        isAfter: isAfter,
+-        isAlpha: isAlpha,
+-        isAlphanumeric: isAlphanumeric,
+-        isAscii: isAscii,
+-        isBase64: isBase64,
+-        isBefore: isBefore,
+-        isBoolean: isBoolean,
+-        isByteLength: isByteLength,
+-        isCreditCard: isCreditCard,
+-        isCurrency: isCurrency,
+-        isDataURI: isDataURI,
+-        isDecimal: isDecimal,
+-        isDivisibleBy: isDivisibleBy,
+-        isEmail: isEmail,
+-        isEmpty: isEmpty,
+-        isFloat: isFloat,
+-        isFQDN: isFDQN,
+-        isFullWidth: isFullWidth,
+-        isHalfWidth: isHalfWidth,
+-        isHexadecimal: isHexadecimal,
+-        isHexColor: isHexColor,
+-        isIn: isIn,
+-        isInt: isInt,
+-        isIP: isIP,
+-        isRFC5646: isRFC5646,
+-        isISBN: isISBN,
+-        isISIN: isISIN,
+-        isISO8601: isISO8601,
+-        isISRC: isISRC,
+-        isRGBColor: isRGBColor,
+-        isISSN: isISSN,
+-        isJSON: isJSON,
+-        isLength: isLength,
+-        isLowercase: isLowercase,
+-        isMACAddress: isMACAddress,
+-        isMD5: isMD5,
+-        isMobilePhone: isMobilePhone,
+-        isMongoId: isMongoId,
+-        isMultibyte: isMultibyte,
+-        isNumeric: isNumeric,
+-        isSemVer: isSemVer,
+-        isSurrogatePair: isSurrogatePair,
+-        isUppercase: isUppercase,
+-        isURL: isURL,
+-        isUUID: isUUID,
+-        isVariableWidth: isVariableWidth,
+-        isWhitelisted: isWhitelisted,
+-        ltrim: ltrim,
+-        matches: matches,
+-        normalizeEmail: normalizeEmail,
+-        rtrim: rtrim,
+-        stripLow: stripLow,
+-        toBoolean: toBoolean,
+-        toDate: toDate,
+-        toFloat: toFloat,
+-        toInt: toInt,
+-        toString: toString,
+-        trim: trim,
+-        unescape: unescape,
+-        version: version,
+-        whitelist: whitelist
+-      };
+-
+-      return validator;
+-}));
+diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
+--- a/devtools/client/storage/ui.js
++++ b/devtools/client/storage/ui.js
+@@ -8,7 +8,7 @@
+ const EventEmitter = require("devtools/shared/event-emitter");
+ const {LocalizationHelper, ELLIPSIS} = require("devtools/shared/l10n");
+ const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
+-const JSOL = require("devtools/client/shared/vendor/jsol");
++const {parseItemValue} = require("devtools/shared/storage/utils");
+ const {KeyCodes} = require("devtools/client/shared/keycodes");
+ const { getUnicodeHostname } = require("devtools/client/shared/unicode-url");
+ 
+@@ -24,8 +24,6 @@ loader.lazyRequireGetter(this, "TableWid
+                          "devtools/client/shared/widgets/TableWidget", true);
+ loader.lazyImporter(this, "VariablesView",
+                     "resource://devtools/client/shared/widgets/VariablesView.jsm");
+-loader.lazyRequireGetter(this, "validator",
+-                         "devtools/client/shared/vendor/stringvalidator/validator");
+ 
+ /**
+  * Localization convenience methods.
+@@ -62,7 +60,6 @@ const COOKIE_KEY_MAP = {
+ };
+ 
+ const SAFE_HOSTS_PREFIXES_REGEX = /^(about:|https?:|file:|moz-extension:)/;
+-const MATH_REGEX = /(?:(?:^|[-+_*/])(?:\s*-?\d+(\.\d+)?(?:[eE][+-]?\d+)?\s*))+$/;
+ 
+ // Maximum length of item name to show in context menu label - will be
+ // trimmed with ellipsis if it's longer.
+@@ -756,7 +753,10 @@ class StorageUI {
+       itemVar.setGrip(value);
+ 
+       // May be the item value is a json or a key value pair itself
+-      this.parseItemValue(item.name, value);
++      const obj = parseItemValue(item.name, value);
++      if (typeof obj === "object") {
++        this.populateSidebar(item.name, obj);
++      }
+ 
+       // By default the item name and value are shown. If this is the only
+       // information available, then nothing else is to be displayed.
+@@ -789,7 +789,10 @@ class StorageUI {
+         }
+ 
+         mainScope.addItem(key, {}, true).setGrip(item[key]);
+-        this.parseItemValue(key, item[key]);
++        const obj = parseItemValue(key, item[key]);
++        if (typeof obj === "object") {
++          this.populateSidebar(item.name, obj);
++        }
+       }
+     }
+ 
+@@ -825,47 +828,13 @@ class StorageUI {
+     return host;
+   }
+ 
+-  /**
+-   * Tries to parse a string value into either a json or a key-value separated
+-   * object and populates the sidebar with the parsed value. The value can also
+-   * be a key separated array.
++  /*
++   * Populates the sidebar with a parsed object.
+    *
+-   * @param {string} name
+-   *        The key corresponding to the `value` string in the object
+-   * @param {string} originalValue
+-   *        The string to be parsed into an object
++   * @param {object} obj - Either a json or a key-value separated object or a
++   * key separated array
+    */
+-  parseItemValue(name, originalValue) {
+-    // Find if value is URLEncoded ie
+-    let decodedValue = "";
+-    try {
+-      decodedValue = decodeURIComponent(originalValue);
+-    } catch (e) {
+-      // Unable to decode, nothing to do
+-    }
+-    const value = (decodedValue && decodedValue !== originalValue)
+-      ? decodedValue : originalValue;
+-
+-    if (!this._shouldParse(value)) {
+-      return;
+-    }
+-
+-    let obj = null;
+-    try {
+-      obj = JSOL.parse(value);
+-    } catch (ex) {
+-      obj = null;
+-    }
+-
+-    if (!obj && value) {
+-      obj = this._extractKeyValPairs(value);
+-    }
+-
+-    // return if obj is null, or same as value, or just a string.
+-    if (!obj || obj === value || typeof obj === "string") {
+-      return;
+-    }
+-
++  populateSidebar(name, obj) {
+     const jsonObject = Object.create(null);
+     const view = this.view;
+     jsonObject[name] = obj;
+@@ -879,97 +848,6 @@ class StorageUI {
+   }
+ 
+   /**
+-   * Tries to parse a string into an object on the basis of key-value pairs,
+-   * separated by various separators. If failed, tries to parse for single
+-   * separator separated values to form an array.
+-   *
+-   * @param {string} value
+-   *        The string to be parsed into an object or array
+-   */
+-  _extractKeyValPairs(value) {
+-    const makeObject = (keySep, pairSep) => {
+-      const object = {};
+-      for (const pair of value.split(pairSep)) {
+-        const [key, val] = pair.split(keySep);
+-        object[key] = val;
+-      }
+-      return object;
+-    };
+-
+-    // Possible separators.
+-    const separators = ["=", ":", "~", "#", "&", "\\*", ",", "\\."];
+-    // Testing for object
+-    for (let i = 0; i < separators.length; i++) {
+-      const kv = separators[i];
+-      for (let j = 0; j < separators.length; j++) {
+-        if (i == j) {
+-          continue;
+-        }
+-        const p = separators[j];
+-        const word = `[^${kv}${p}]*`;
+-        const keyValue = `${word}${kv}${word}`;
+-        const keyValueList = `${keyValue}(${p}${keyValue})*`;
+-        const regex = new RegExp(`^${keyValueList}$`);
+-        if (value.match && value.match(regex) && value.includes(kv) &&
+-            (value.includes(p) || value.split(kv).length == 2)) {
+-          return makeObject(kv, p);
+-        }
+-      }
+-    }
+-    // Testing for array
+-    for (const p of separators) {
+-      const word = `[^${p}]*`;
+-      const wordList = `(${word}${p})+${word}`;
+-      const regex = new RegExp(`^${wordList}$`);
+-
+-      if (regex.test(value)) {
+-        const pNoBackslash = p.replace(/\\*/g, "");
+-        return value.split(pNoBackslash);
+-      }
+-    }
+-    return null;
+-  }
+-
+-  /**
+-   * Check whether the value string represents something that should be
+-   * displayed as text. If so then it shouldn't be parsed into a tree.
+-   *
+-   * @param  {String} value
+-   *         The value to be parsed.
+-   */
+-  _shouldParse(value) {
+-    const validators = [
+-      "isBase64",
+-      "isBoolean",
+-      "isCurrency",
+-      "isDataURI",
+-      "isEmail",
+-      "isFQDN",
+-      "isHexColor",
+-      "isIP",
+-      "isISO8601",
+-      "isMACAddress",
+-      "isSemVer",
+-      "isURL",
+-    ];
+-
+-    // Check for minus calculations e.g. 8-3 because otherwise 5 will be displayed.
+-    if (MATH_REGEX.test(value)) {
+-      return false;
+-    }
+-
+-    // Check for any other types that shouldn't be parsed.
+-    for (const test of validators) {
+-      if (validator[test](value)) {
+-        return false;
+-      }
+-    }
+-
+-    // Seems like this is data that should be parsed.
+-    return true;
+-  }
+-
+-  /**
+    * Select handler for the storage tree. Fetches details of the selected item
+    * from the storage details and populates the storage tree.
+    *
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
@@ -1095,7 +7541,7 @@ diff --git a/devtools/shared/storage/utils.js b/devtools/shared/storage/utils.js
 new file mode 100644
 --- /dev/null
 +++ b/devtools/shared/storage/utils.js
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,148 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1200,8 +7646,7 @@ new file mode 100644
 +
 +/**
 + * Tries to parse a string value into either a json or a key-value separated
-+ * object and populates the sidebar with the parsed value. The value can also
-+ * be a key separated array.
++ * object. The value can also be a key separated array.
 + *
 + * @param {string} name
 + *        The key corresponding to the `value` string in the object
@@ -1239,6 +7684,8 @@ new file mode 100644
 +    return value;
 +  }
 +
++  // If we got this far, originalValue is an object literal or array,
++  // and we have successfully parsed it
 +  return obj;
 +}
 +
