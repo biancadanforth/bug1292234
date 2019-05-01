@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1555711627 25200
 #      Fri Apr 19 15:07:07 2019 -0700
-# Node ID 268055fffba18e272968f39dd3cb100b473581bf
+# Node ID 4de1a6981171975998a32e376d5b97c24af52cb1
 # Parent  11b4d70a2b5d6373f5ec8fa01ca48a1c7bc1829e
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -13990,16 +13990,7 @@ diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/compo
  this.storage = class extends ExtensionAPI {
    constructor(extension) {
      super(extension);
-@@ -63,6 +80,8 @@ this.storage = class extends ExtensionAP
-     }
- 
-     ExtensionStorageIDB.notifyListeners(this.extension.id, data);
-+
-+    notifyDevToolsListeners(this.extension, data);
-   }
- 
-   getAPI(context) {
-@@ -82,6 +101,7 @@ this.storage = class extends ExtensionAP
+@@ -82,6 +99,7 @@ this.storage = class extends ExtensionAP
              const changes = await db[method](...args);
              if (changes) {
                ExtensionStorageIDB.notifyListeners(extension.id, changes);
