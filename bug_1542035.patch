@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID bb9f5c14db62ddb070cba0e2f7db982f189aa160
+# Node ID 408741fdae83b4899cc68a2de2dc0e74b0c50806
 # Parent  df3eadfa74a8061f4c88496404d51baf47e21070
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -1245,7 +1245,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,151 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -1364,8 +1364,27 @@ new file mode 100644
 +  await extension.unload();
 +}
 +
++/**
++ * Mocks the missing 'storage/permanent' directory needed by the "indexedDB"
++ * storage actor's preListStores method (called when 'listStores' is called). This
++ * directory exists in a full browser i.e. mochitest.
++ */
++function createMissingIndexedDBDirs() {
++  const dir = (Services.dirsvc.get("ProfD", Ci.nsIFile)).clone();
++  dir.append("storage");
++  if (!dir.exists()) {
++    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
++  }
++  dir.append("permanent");
++  if (!dir.exists()) {
++    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
++  }
++  Assert.ok(dir.exists(), "Should have a 'storage/permanent' dir in the profile dir");
++}
++
 +add_task(async function setup() {
 +  await promiseStartupManager();
++  createMissingIndexedDBDirs();
 +});
 +
 +add_task(async function test_extension_store_exists() {
