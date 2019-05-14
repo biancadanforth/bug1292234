@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 0d09cc87b098a3b828c2b1e9afc5d1f3bb95e03f
-# Parent  df3eadfa74a8061f4c88496404d51baf47e21070
+# Node ID 10e5d3a0601d295cb436d94e338e5d6c4dc95740
+# Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
@@ -701,17 +701,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
---- a/devtools/server/tests/browser/browser.ini
-+++ b/devtools/server/tests/browser/browser.ini
-@@ -127,6 +127,7 @@ skip-if = e10s # Bug 1183605 - devtools/
- [browser_storage_listings.js]
- [browser_storage_updates.js]
- skip-if = (verify && debug && (os == 'mac' || os == 'linux'))
-+[browser_storage_webext_storage_local.js]
- [browser_stylesheets_getTextEmpty.js]
- [browser_stylesheets_nested-iframes.js]
- [browser_register_actor.js]
 diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
 new file mode 100644
 --- /dev/null
