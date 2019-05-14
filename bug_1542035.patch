@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 373c0464c9181dbdaa709c383e88cb94b5a794af
+# Node ID 0d09cc87b098a3b828c2b1e9afc5d1f3bb95e03f
 # Parent  df3eadfa74a8061f4c88496404d51baf47e21070
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -250,7 +250,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1303,442 @@ StorageActors.createActor({
+@@ -1298,6 +1303,450 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -469,7 +469,15 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +    for (const key in changes) {
 +      const storageChange = changes[key];
-+      const {newValue, oldValue} = storageChange;
++      let {newValue, oldValue} = storageChange;
++      if (newValue && typeof newValue === "object"
++        && Cu.getClassName(newValue, true) === "StructuredCloneHolder") {
++        newValue = newValue.deserialize(this);
++      }
++      if (oldValue && typeof oldValue === "object"
++        && Cu.getClassName(oldValue, true) === "StructuredCloneHolder") {
++        oldValue = oldValue.deserialize(this);
++      }
 +
 +      let action;
 +      if (typeof newValue === "undefined") {
@@ -708,7 +716,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,543 @@
+@@ -0,0 +1,554 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -943,13 +951,24 @@ new file mode 100644
 +  let {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
 +
-+  extension.sendMessage("storage-local-set", {a: 123});
++  extension.sendMessage("storage-local-set", {
++    a: 123,
++    b: [4, 5],
++    c: {d: 678},
++    d: true,
++    e: "hi",
++  });
 +  await extension.awaitMessage("storage-local-set:done");
 +
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
-+    data,
-+    [{name: "a", value: {str: "123"}}],
++    data, [
++      {name: "a", value: {str: "123"}},
++      {name: "b", value: {str: "[4,5]"}},
++      {name: "c", value: {str: "{\"d\":678}"}},
++      {name: "d", value: {str: "true"}},
++      {name: "e", value: {str: "hi"}},
++    ],
 +    "Got the expected results on populated storage.local"
 +  );
 +
