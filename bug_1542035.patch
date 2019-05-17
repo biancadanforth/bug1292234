@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID fc97b9e0fc91b642e84e263db69084976bc019c2
+# Node ID 552998087ee64dec1342012f24813a2b409bb807
 # Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -721,7 +721,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,622 @@
+@@ -0,0 +1,628 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -745,6 +745,9 @@ new file mode 100644
 +  createAppInfo,
 +  promiseStartupManager,
 +} = AddonTestUtils;
++
++const LEAVE_UUID_PREF = "extensions.webextensions.keepUuidOnUninstall";
++const LEAVE_STORAGE_PREF = "extensions.webextensions.keepStorageOnUninstall";
 +
 +AddonTestUtils.init(this);
 +createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
@@ -1220,11 +1223,9 @@ new file mode 100644
 +add_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
 +  // The pref to leave the addonid->uuid mapping around after uninstall so that we can
 +  // re-attach to the same storage
-+  const LEAVE_UUID_PREF = "extensions.webextensions.keepUuidOnUninstall";
 +  Services.prefs.setBoolPref(LEAVE_UUID_PREF, true);
 +
 +  // The pref to prevent cleaning up storage on uninstall
-+  const LEAVE_STORAGE_PREF = "extensions.webextensions.keepStorageOnUninstall";
 +  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, true);
 +
 +  let extension = ExtensionTestUtils.loadExtension(
@@ -1278,6 +1279,11 @@ new file mode 100644
 +  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
 +
 +  await shutdown(extension, target);
++});
++
++add_task(function cleanup_for_test_local_storage_ext_data_added_prior_to_ext_startup() {
++  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
++  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
 +});
 +
 +/**
