@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 10e5d3a0601d295cb436d94e338e5d6c4dc95740
+# Node ID fc97b9e0fc91b642e84e263db69084976bc019c2
 # Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -701,11 +701,27 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
+@@ -2688,9 +3137,12 @@ const StorageActor = protocol.ActorClass
+         (!subject.location.href || subject.location.href == "about:blank")) {
+       return null;
+     }
+-
+-    if (topic == "content-document-global-created" &&
+-        this.isIncludedInTopLevelWindow(subject)) {
++    // We don't want to try to find a top level window for an extension page, as
++    // in many cases (e.g. background page), it is not loaded in a tab, and
++    // 'isIncludedInTopLevelWindow' throws an error
++    if (topic == "content-document-global-created"
++      && (subject.location.href.startsWith("moz-extension://")
++      || this.isIncludedInTopLevelWindow(subject))) {
+       this.childWindowPool.add(subject);
+       this.emit("window-ready", subject);
+     } else if (topic == "inner-window-destroyed") {
 diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,554 @@
+@@ -0,0 +1,622 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -771,18 +787,21 @@ new file mode 100644
 +* background script if provided
 +* @param {Object} options.files - An object whose keys correspond to file names and
 +* values map to the file contents
++* @param {Object} options.manifest - An object representing the extension's manifest
 +* @return {Object} - The extension configuration object
 +*/
 +function getExtensionConfig(options = {}) {
++  const {manifest, ...otherOptions} = options;
 +  const baseConfig = {
 +    manifest: {
++      ...manifest,
 +      permissions: ["storage"],
 +    },
 +    useAddonManager: "temporary",
 +  };
 +  return {
 +    ...baseConfig,
-+    ...options,
++    ...otherOptions,
 +  };
 +}
 +
@@ -1257,6 +1276,71 @@ new file mode 100644
 +
 +  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
 +  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Bg page adds an item to storage. With inspector open, reload extension.
++* - Load extension with background page that adds a storage item on message.
++* - Open the add-on inspector.
++* - With the inspector still open, reload the extension.
++* - The data in the inspector should match the item added prior to reloading.
++*/
++add_task(async function test_local_storage_live_reload() {
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading extension version 1.0");
++  const extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({
++      manifest,
++      background: extensionScriptWithMessageListener,
++    })
++  );
++
++  info("Starting up extension");
++  await extension.startup();
++
++  info("Waiting for message from test extension");
++  const host = await extension.awaitMessage("extension-origin");
++
++  info("Adding storage item");
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  const {target} = await setupExtensionDebugging(extension.id);
++  // This effectively opens the storage inspector by calling listStores
++  const extensionStorage = await getExtensionStorage(target);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Update to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      background: extensionScriptWithMessageListener,
++    }),
++  );
++
++  await extension.awaitMessage("extension-origin");
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
 +
 +  await shutdown(extension, target);
 +});
