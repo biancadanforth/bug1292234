@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 552998087ee64dec1342012f24813a2b409bb807
+# Node ID 0873cee608107ad541747c63f36c7d3b3f2f41e3
 # Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -721,7 +721,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,696 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -1345,6 +1345,74 @@ new file mode 100644
 +  Assert.deepEqual(
 +    data,
 +    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Bg page automatically adds item(s). With inspector open, reload extension.
++* - Load extension with background page that automatically adds a storage item on startup.
++* - Open the add-on inspector.
++* - With the inspector still open, reload the extension.
++* - The data in the inspector should match the item(s) added by the reloaded extension.
++*/
++add_task(async function test_local_storage_live_reload_bg_page_auto_adds_items() {
++  async function background() {
++    await browser.storage.local.set({a: {b: 123}, c: {d: 456}});
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading extension version 1.0");
++  const extension = ExtensionTestUtils.loadExtension(
++    getExtensionConfig({
++      manifest,
++      background,
++    })
++  );
++
++  info("Starting up extension");
++  await extension.startup();
++
++  info("Waiting for message from test extension");
++  const host = await extension.awaitMessage("extension-origin");
++
++  const {target} = await setupExtensionDebugging(extension.id);
++  // This effectively opens the storage inspector by calling listStores
++  const extensionStorage = await getExtensionStorage(target);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Update to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      background,
++    }),
++  );
++
++  await extension.awaitMessage("extension-origin");
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [
++      {name: "a", value: {str: "{\"b\":123}"}},
++      {name: "c", value: {str: "{\"d\":456}"}},
++    ],
 +    "Got the expected results on populated storage.local"
 +  );
 +
