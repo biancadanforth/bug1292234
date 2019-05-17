@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 0873cee608107ad541747c63f36c7d3b3f2f41e3
+# Node ID 472a492899253af94e27319be7a742b8f975b1c9
 # Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -721,7 +721,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,696 @@
+@@ -0,0 +1,764 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -1340,6 +1340,74 @@ new file mode 100644
 +  );
 +
 +  await extension.awaitMessage("extension-origin");
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Transient page adds an item to storage. With inspector open,
++* reload extension.
++* - Load extension open transient page that adds a storage item on message.
++* - Open the add-on storage inspector.
++* - With the inspector still open, reload the extension.
++* - The data in the inspector should match the item added prior to reloading.
++*/
++add_task(async function test_local_storage_live_reload_no_bg_page() {
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading extension version 1.0");
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
++    manifest,
++    files: ext_no_bg.files,
++  }));
++
++  info("Starting up extension");
++  await extension.startup();
++
++  info("Opening extension page in a tab");
++  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
++  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  info("Waiting for extension page in a tab to add storage item");
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await contentPage.close();
++
++  info("Opening storage inspector");
++  const {target} = await setupExtensionDebugging(extension.id);
++  // This effectively opens the storage inspector by calling listStores
++  const extensionStorage = await getExtensionStorage(target);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Updating extension to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      files: ext_no_bg.files,
++    })
++  );
 +
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
