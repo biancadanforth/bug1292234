@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 472a492899253af94e27319be7a742b8f975b1c9
-# Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
+# Node ID 6b01cdfe741fd2dd503d2e0d5860ef5e7c31d4c2
+# Parent  9b2f851979cb8d0dd0cd2618656eddee32e4f143
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
@@ -232,13 +232,14 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,12 +12,17 @@ const Services = require("Services");
+@@ -12,12 +12,18 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
 +const {parseItemValue} = require("devtools/shared/storage/utils");
 +const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
 +const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
++const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
@@ -250,7 +251,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1303,450 @@ StorageActors.createActor({
+@@ -1298,6 +1304,455 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -274,7 +275,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +  // The main process does not require an extension context to select the backend
 +  async selectBackendInParent(addonId) {
-+    const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
 +    const {extension} = WebExtensionPolicy.getByID(addonId);
 +    const parentResult = await ExtensionStorageIDB.selectBackend({extension});
 +    const result = {
@@ -402,7 +402,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    // Map<host, ExtensionStorageIDB db connection>
 +    this.dbConnectionForHost = new Map();
 +
-+    this.setupChildProcess();
++    this.maybeSetupChildProcess();
 +
 +    this.onStorageChange = this.onStorageChange.bind(this);
 +
@@ -431,7 +431,14 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    this.storageActor = null;
 +  },
 +
-+  setupChildProcess() {
++  maybeSetupChildProcess() {
++    if (!DebuggerServer.isInChildProcess) {
++      this.backToChild = (func, rv) => rv;
++      this.onChangedListeners = extensionStorageHelpers.onChangedListeners;
++      this.selectBackendInParent = extensionStorageHelpers.selectBackendInParent;
++      return;
++    }
++
 +    const ppmm = this.conn.parentMessageManager;
 +    extensionStorageHelpers.setPpmm(ppmm);
 +
@@ -502,16 +509,13 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +   * cannot be asynchronous.
 +   */
 +  async preListStores() {
-+    this.hostVsStores = new Map();
-+
-+    for (const window of this.windows) {
-+      let host = this.getHostName(window.location);
-+      if (!host) {
-+        const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
-+        host = `moz-extension://${extension.uuid}`;
-+      }
-+      await this.populateStoresForHost(host, window);
++    // Ensure the actor's target is an extension and it is enabled
++    if (!this.addonId || !WebExtensionPolicy.getByID(this.addonId)) {
++      return;
 +    }
++    this.hostVsStores = new Map();
++    const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
++    await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
 +  },
 +
 +  /**
@@ -546,6 +550,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    const db = await ExtensionStorageIDB.open(storagePrincipal);
 +    this.dbConnectionForHost.set(host, db);
 +    const data = await db.get();
++    console.log("ZEBRA", "populateStoresForHost", "data: ", Object.entries(data));
 +
 +    const storeMap = new Map();
 +    for (const [key, value] of Object.entries(data)) {
@@ -553,11 +558,12 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    }
 +
 +    this.hostVsStores.set(host, storeMap);
-+
++    console.log("ZEBRA", "populateStoresForHost", "this.hostVsStores.get(host): ", this.hostVsStores.get(host));
 +    // Show the storage actor in the add-on storage inspector even when there
 +    // is no extension page currently open
 +    const storageData = {};
 +    storageData[host] = this.getNamesForHost(host);
++    console.log("ZEBRA", "populateStoresForHost", "storageData: ", storageData);
 +    this.storageActor.update("added", this.typeName, storageData);
 +  },
 +
@@ -701,7 +707,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2688,9 +3137,12 @@ const StorageActor = protocol.ActorClass
+@@ -2688,9 +3143,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -717,17 +723,47 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
+@@ -2776,6 +3234,10 @@ const StorageActor = protocol.ActorClass
+    *           removed or cleared.
+    */
+   update(action, storeType, data) {
++    if (storeType === "extensionStorage") {
++      console.trace("ZEBRA", "this.storageActor.update", action, storeType, data);
++    }
++
+     if (action == "cleared") {
+       this.emit("stores-cleared", { [storeType]: data });
+       return null;
+@@ -2831,6 +3293,10 @@ const StorageActor = protocol.ActorClass
+       }
+     }
+ 
++    if (storeType === "extensionStorage") {
++      console.log("ZEBRA", "this.storageActor.update", "this.boundUpdate: ", this.boundUpdate);
++    }
++
+     this.batchTimer = setTimeout(() => {
+       clearTimeout(this.batchTimer);
+       this.emit("stores-update", this.boundUpdate);
 diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,764 @@
+@@ -0,0 +1,773 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
 +/* globals browser */
 +
 +"use strict";
++
++function xadd_task() {}
++
++// Test storage actor in single process Firefox (E.g. Firefox for Android)
++Services.prefs.setBoolPref("extensions.webextensions.remote", false);
++registerCleanupFunction(() => {
++  Services.prefs.clearUserPref("extensions.webextensions.remote");
++});
 +
 +const {
 +  AddonTestUtils,
@@ -908,7 +944,7 @@ new file mode 100644
 +  createMissingIndexedDBDirs();
 +});
 +
-+add_task(async function test_extension_store_exists() {
++xadd_task(async function test_extension_store_exists() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
 +
 +  await extension.startup();
@@ -929,10 +965,11 @@ new file mode 100644
 +  );
 +
 +  await extension.startup();
++  const expectedHost = await extension.awaitMessage("extension-origin");
 +
 +  const {target} = await setupExtensionDebugging(extension.id);
 +  const {hosts} = await getExtensionStorage(target);
-+  const expectedHost = await extension.awaitMessage("extension-origin");
++  console.log("ZEBRA", "test_extension_origin_matches_debugger_target", "hosts: ", hosts);
 +  ok(expectedHost in hosts,
 +     "Should have the expected extension host in the extensionStorage store");
 +
@@ -946,7 +983,7 @@ new file mode 100644
 +* - With the inspector still open, add an item from the background page.
 +* - The data in the inspector should match the item added by the extension.
 +*/
-+add_task(async function test_local_storage_live_update() {
++xadd_task(async function test_local_storage_live_update() {
 +  const extension = ExtensionTestUtils.loadExtension(
 +    getExtensionConfig({background: extensionScriptWithMessageListener})
 +  );
@@ -993,7 +1030,7 @@ new file mode 100644
 +* - With the extension page still open, open the add-on inspector.
 +* - The data in the inspector should match the items added by the extension.
 +*/
-+add_task(async function test_local_storage_ext_no_bg_with_ext_page_open() {
++xadd_task(async function test_local_storage_ext_no_bg_with_ext_page_open() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
 +    files: ext_no_bg.files,
 +  }));
@@ -1031,7 +1068,7 @@ new file mode 100644
 +* - Open the add-on inspector.
 +* - The data in the inspector should match the item added by the extension.
 +*/
-+add_task(async function test_local_storage_ext_no_bg_with_no_ext_page_open() {
++xadd_task(async function test_local_storage_ext_no_bg_with_no_ext_page_open() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
 +    files: ext_no_bg.files,
 +  }));
@@ -1073,7 +1110,7 @@ new file mode 100644
 +*   - If an extension page adds the same data again, the data in the inspector should
 +*     not change.
 +*/
-+add_task(async function test_local_storage_ext_no_bg_live_update() {
++xadd_task(async function test_local_storage_ext_no_bg_live_update() {
 +  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
 +    files: ext_no_bg.files,
 +  }));
@@ -1127,7 +1164,7 @@ new file mode 100644
 +*   - The storage actor is not mutating the item value's data type
 +*     when the item's value is edited in the inspector
 +*/
-+add_task(async function test_local_storage_value_data_types_unchanged() {
++xadd_task(async function test_local_storage_value_data_types_unchanged() {
 +  const extension = ExtensionTestUtils.loadExtension(
 +    getExtensionConfig({background: extensionScriptWithMessageListener})
 +  );
@@ -1220,7 +1257,7 @@ new file mode 100644
 +* - The data in the inspector should live update with both items: the item added from the
 +*   first and the item added from the reinstall.
 +*/
-+add_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
++xadd_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
 +  // The pref to leave the addonid->uuid mapping around after uninstall so that we can
 +  // re-attach to the same storage
 +  Services.prefs.setBoolPref(LEAVE_UUID_PREF, true);
@@ -1281,7 +1318,7 @@ new file mode 100644
 +  await shutdown(extension, target);
 +});
 +
-+add_task(function cleanup_for_test_local_storage_ext_data_added_prior_to_ext_startup() {
++xadd_task(function cleanup_for_test_local_storage_ext_data_added_prior_to_ext_startup() {
 +  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
 +  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
 +});
@@ -1293,7 +1330,7 @@ new file mode 100644
 +* - With the inspector still open, reload the extension.
 +* - The data in the inspector should match the item added prior to reloading.
 +*/
-+add_task(async function test_local_storage_live_reload() {
++xadd_task(async function test_local_storage_live_reload() {
 +  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
 +  let manifest = {
 +    version: "1.0",
@@ -1359,7 +1396,7 @@ new file mode 100644
 +* - With the inspector still open, reload the extension.
 +* - The data in the inspector should match the item added prior to reloading.
 +*/
-+add_task(async function test_local_storage_live_reload_no_bg_page() {
++xadd_task(async function test_local_storage_live_reload_no_bg_page() {
 +  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
 +  let manifest = {
 +    version: "1.0",
@@ -1426,7 +1463,7 @@ new file mode 100644
 +* - With the inspector still open, reload the extension.
 +* - The data in the inspector should match the item(s) added by the reloaded extension.
 +*/
-+add_task(async function test_local_storage_live_reload_bg_page_auto_adds_items() {
++xadd_task(async function test_local_storage_live_reload_bg_page_auto_adds_items() {
 +  async function background() {
 +    await browser.storage.local.set({a: {b: 123}, c: {d: 456}});
 +    browser.test.sendMessage("extension-origin", window.location.origin);
