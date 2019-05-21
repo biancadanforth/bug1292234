@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 472a492899253af94e27319be7a742b8f975b1c9
-# Parent  a0403c2bfae40a8b3cebd532ce730fa824181fee
+# Node ID 16a16aec5b065e6f45e90cd580d25716fadbe992
+# Parent  9b2f851979cb8d0dd0cd2618656eddee32e4f143
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
@@ -232,13 +232,14 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,12 +12,17 @@ const Services = require("Services");
+@@ -12,12 +12,18 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
 +const {parseItemValue} = require("devtools/shared/storage/utils");
 +const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
 +const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
++const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
@@ -250,7 +251,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1303,450 @@ StorageActors.createActor({
+@@ -1298,6 +1304,447 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -274,7 +275,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +  // The main process does not require an extension context to select the backend
 +  async selectBackendInParent(addonId) {
-+    const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
 +    const {extension} = WebExtensionPolicy.getByID(addonId);
 +    const parentResult = await ExtensionStorageIDB.selectBackend({extension});
 +    const result = {
@@ -502,16 +502,14 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +   * cannot be asynchronous.
 +   */
 +  async preListStores() {
-+    this.hostVsStores = new Map();
-+
-+    for (const window of this.windows) {
-+      let host = this.getHostName(window.location);
-+      if (!host) {
-+        const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
-+        host = `moz-extension://${extension.uuid}`;
-+      }
-+      await this.populateStoresForHost(host, window);
++    // Ensure the actor's target is an extension and it is enabled
++    if (!this.addonId || !(WebExtensionPolicy.getByID(this.addonId))) {
++      return;
 +    }
++
++    this.hostVsStores = new Map();
++    const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
++    await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
 +  },
 +
 +  /**
@@ -701,7 +699,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2688,9 +3137,12 @@ const StorageActor = protocol.ActorClass
+@@ -2688,9 +3135,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
