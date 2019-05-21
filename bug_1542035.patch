@@ -2,10 +2,23 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 16a16aec5b065e6f45e90cd580d25716fadbe992
+# Node ID aa7bf6e9a770d90dc3311e2c49a6eab5b7253386
 # Parent  9b2f851979cb8d0dd0cd2618656eddee32e4f143
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -79,6 +79,9 @@ pref("extensions.langpacks.signatures.re
+ pref("xpinstall.signatures.required", true);
+ pref("xpinstall.signatures.devInfoURL", "https://wiki.mozilla.org/Addons/Extension_Signing");
+ 
++// Disable extensionStorage storage actor by default
++pref("devtools.storage.extensionStorage.enabled", false);
++
+ // Dictionary download preference
+ pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/language-tools/");
+ 
 diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
 --- a/devtools/client/shared/vendor/moz.build
 +++ b/devtools/client/shared/vendor/moz.build
@@ -232,7 +245,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,12 +12,18 @@ const Services = require("Services");
+@@ -12,12 +12,19 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
@@ -243,6 +256,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
++const EXTENSION_STORAGE_ENABLED_PREF = "devtools.storage.extensionStorage.enabled";
  
  const DEFAULT_VALUE = "value";
  
@@ -251,7 +265,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1304,447 @@ StorageActors.createActor({
+@@ -1298,6 +1305,449 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -389,317 +403,319 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +/**
 +* The Extension Storage actor.
 +*/
-+StorageActors.createActor({
-+  typeName: "extensionStorage",
-+}, {
-+  initialize(storageActor) {
-+    protocol.Actor.prototype.initialize.call(this, null);
++if (Services.prefs.getBoolPref(EXTENSION_STORAGE_ENABLED_PREF)) {
++  StorageActors.createActor({
++    typeName: "extensionStorage",
++  }, {
++    initialize(storageActor) {
++      protocol.Actor.prototype.initialize.call(this, null);
 +
-+    this.storageActor = storageActor;
++      this.storageActor = storageActor;
 +
-+    this.addonId = this.storageActor.parentActor.addonId;
++      this.addonId = this.storageActor.parentActor.addonId;
 +
-+    // Map<host, ExtensionStorageIDB db connection>
-+    this.dbConnectionForHost = new Map();
++      // Map<host, ExtensionStorageIDB db connection>
++      this.dbConnectionForHost = new Map();
 +
-+    this.setupChildProcess();
++      this.setupChildProcess();
 +
-+    this.onStorageChange = this.onStorageChange.bind(this);
++      this.onStorageChange = this.onStorageChange.bind(this);
 +
-+    this.conn.parentMessageManager.addMessageListener(
-+      DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
++      this.conn.parentMessageManager.addMessageListener(
++        DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
 +
-+    this.populateStoresForHosts();
++      this.populateStoresForHosts();
 +
-+    this.onWindowReady = this.onWindowReady.bind(this);
-+    this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
-+    this.storageActor.on("window-ready", this.onWindowReady);
-+    this.storageActor.on("window-destroyed", this.onWindowDestroyed);
-+  },
++      this.onWindowReady = this.onWindowReady.bind(this);
++      this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
++      this.storageActor.on("window-ready", this.onWindowReady);
++      this.storageActor.on("window-destroyed", this.onWindowDestroyed);
++    },
 +
-+  destroy() {
-+    this.conn.parentMessageManager.removeMessageListener(
-+      DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
++    destroy() {
++      this.conn.parentMessageManager.removeMessageListener(
++        DEVTOOLS_EXT_STORAGELOCAL_CHANGED, this.onStorageChange);
 +
-+    this.storageActor.off("window-ready", this.onWindowReady);
-+    this.storageActor.off("window-destroyed", this.onWindowDestroyed);
++      this.storageActor.off("window-ready", this.onWindowReady);
++      this.storageActor.off("window-destroyed", this.onWindowDestroyed);
 +
-+    this.hostVsStores.clear();
++      this.hostVsStores.clear();
 +
-+    protocol.Actor.prototype.destroy.call(this);
++      protocol.Actor.prototype.destroy.call(this);
 +
-+    this.storageActor = null;
-+  },
++      this.storageActor = null;
++    },
 +
-+  setupChildProcess() {
-+    const ppmm = this.conn.parentMessageManager;
-+    extensionStorageHelpers.setPpmm(ppmm);
++    setupChildProcess() {
++      const ppmm = this.conn.parentMessageManager;
++      extensionStorageHelpers.setPpmm(ppmm);
 +
-+    this.conn.setupInParent({
-+      module: "devtools/server/actors/storage",
-+      setupParent: "setupParentProcessForExtensionStorage",
-+    });
++      this.conn.setupInParent({
++        module: "devtools/server/actors/storage",
++        setupParent: "setupParentProcessForExtensionStorage",
++      });
 +
-+    this.selectBackendInParent =
-+      extensionStorageHelpers.callParentProcessAsync.bind(
-+        extensionStorageHelpers,
-+        "selectBackendInParent"
++      this.selectBackendInParent =
++        extensionStorageHelpers.callParentProcessAsync.bind(
++          extensionStorageHelpers,
++          "selectBackendInParent"
++        );
++
++      // Add a message listener in the child process to receive messages from the parent
++      // process
++      ppmm.addMessageListener(
++        "debug:storage-extensionStorage-request-child",
++        extensionStorageHelpers.handleParentRequest.bind(extensionStorageHelpers),
 +      );
++    },
 +
-+    // Add a message listener in the child process to receive messages from the parent
-+    // process
-+    ppmm.addMessageListener(
-+      "debug:storage-extensionStorage-request-child",
-+      extensionStorageHelpers.handleParentRequest.bind(extensionStorageHelpers),
-+    );
-+  },
-+
-+  /**
-+  * This fires when the extension changes storage data while the storage
-+  * inspector is open. Ensures this.hostVsStores stays up-to-date and
-+  * passes the change on to update the view.
-+  */
-+  onStorageChange({name, data}) {
-+    const host = `moz-extension://${data.extensionUUID}`;
-+    const changes = data.changes;
-+    const storeMap = this.hostVsStores.get(host);
-+    if (!storeMap) {
-+      return;
-+    }
-+
-+    for (const key in changes) {
-+      const storageChange = changes[key];
-+      let {newValue, oldValue} = storageChange;
-+      if (newValue && typeof newValue === "object"
-+        && Cu.getClassName(newValue, true) === "StructuredCloneHolder") {
-+        newValue = newValue.deserialize(this);
-+      }
-+      if (oldValue && typeof oldValue === "object"
-+        && Cu.getClassName(oldValue, true) === "StructuredCloneHolder") {
-+        oldValue = oldValue.deserialize(this);
++    /**
++    * This fires when the extension changes storage data while the storage
++    * inspector is open. Ensures this.hostVsStores stays up-to-date and
++    * passes the change on to update the view.
++    */
++    onStorageChange({name, data}) {
++      const host = `moz-extension://${data.extensionUUID}`;
++      const changes = data.changes;
++      const storeMap = this.hostVsStores.get(host);
++      if (!storeMap) {
++        return;
 +      }
 +
-+      let action;
-+      if (typeof newValue === "undefined") {
-+        action = "deleted";
-+        storeMap.delete(key);
-+      } else if (typeof oldValue === "undefined") {
-+        action = "added";
-+        storeMap.set(key, newValue);
-+      } else {
-+        action = "changed";
-+        storeMap.set(key, newValue);
++      for (const key in changes) {
++        const storageChange = changes[key];
++        let {newValue, oldValue} = storageChange;
++        if (newValue && typeof newValue === "object"
++          && Cu.getClassName(newValue, true) === "StructuredCloneHolder") {
++          newValue = newValue.deserialize(this);
++        }
++        if (oldValue && typeof oldValue === "object"
++          && Cu.getClassName(oldValue, true) === "StructuredCloneHolder") {
++          oldValue = oldValue.deserialize(this);
++        }
++
++        let action;
++        if (typeof newValue === "undefined") {
++          action = "deleted";
++          storeMap.delete(key);
++        } else if (typeof oldValue === "undefined") {
++          action = "added";
++          storeMap.set(key, newValue);
++        } else {
++          action = "changed";
++          storeMap.set(key, newValue);
++        }
++
++        this.storageActor.update(action, this.typeName, {[host]: [key]});
++      }
++    },
++
++    /**
++     * Purpose of this method is same as populateStoresForHosts but this is async.
++     * This exact same operation cannot be performed in populateStoresForHosts
++     * method, as that method is called in initialize method of the actor, which
++     * cannot be asynchronous.
++     */
++    async preListStores() {
++      // Ensure the actor's target is an extension and it is enabled
++      if (!this.addonId || !(WebExtensionPolicy.getByID(this.addonId))) {
++        return;
 +      }
 +
-+      this.storageActor.update(action, this.typeName, {[host]: [key]});
-+    }
-+  },
++      this.hostVsStores = new Map();
++      const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
++      await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
++    },
 +
-+  /**
-+   * Purpose of this method is same as populateStoresForHosts but this is async.
-+   * This exact same operation cannot be performed in populateStoresForHosts
-+   * method, as that method is called in initialize method of the actor, which
-+   * cannot be asynchronous.
-+   */
-+  async preListStores() {
-+    // Ensure the actor's target is an extension and it is enabled
-+    if (!this.addonId || !(WebExtensionPolicy.getByID(this.addonId))) {
-+      return;
-+    }
++    /**
++     * This method is overriden and left blank as for extensionStorage, this operation
++     * cannot be performed synchronously. Thus, the preListStores method exists to
++     * do the same task asynchronously.
++     */
++    populateStoresForHosts() {},
 +
-+    this.hostVsStores = new Map();
-+    const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
-+    await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
-+  },
++    /**
++    * This method asynchronously reads the browser.storage.local data for the target
++    * extension if it has the storage permission and caches this data into
++    * this.hostVsStores.
++    * @param {String} host - the hostname for the extension
++    */
++    async populateStoresForHost(host) {
++      if (this.hostVsStores.has(host)) {
++        return;
++      }
 +
-+  /**
-+   * This method is overriden and left blank as for extensionStorage, this operation
-+   * cannot be performed synchronously. Thus, the preListStores method exists to
-+   * do the same task asynchronously.
-+   */
-+  populateStoresForHosts() {},
++      const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
++      if (!extension || !(extension.hasPermission("storage"))) {
++        return;
++      }
 +
-+  /**
-+  * This method asynchronously reads the browser.storage.local data for the target
-+  * extension if it has the storage permission and caches this data into
-+  * this.hostVsStores.
-+  * @param {String} host - the hostname for the extension
-+  */
-+  async populateStoresForHost(host) {
-+    if (this.hostVsStores.has(host)) {
-+      return;
-+    }
++      const storagePrincipal = await this.getStoragePrincipal(extension);
 +
-+    const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
-+    if (!extension || !(extension.hasPermission("storage"))) {
-+      return;
-+    }
++      if (!storagePrincipal) {
++        return;
++      }
 +
-+    const storagePrincipal = await this.getStoragePrincipal(extension);
++      const db = await ExtensionStorageIDB.open(storagePrincipal);
++      this.dbConnectionForHost.set(host, db);
++      const data = await db.get();
 +
-+    if (!storagePrincipal) {
-+      return;
-+    }
++      const storeMap = new Map();
++      for (const [key, value] of Object.entries(data)) {
++        storeMap.set(key, value);
++      }
 +
-+    const db = await ExtensionStorageIDB.open(storagePrincipal);
-+    this.dbConnectionForHost.set(host, db);
-+    const data = await db.get();
++      this.hostVsStores.set(host, storeMap);
 +
-+    const storeMap = new Map();
-+    for (const [key, value] of Object.entries(data)) {
-+      storeMap.set(key, value);
-+    }
++      // Show the storage actor in the add-on storage inspector even when there
++      // is no extension page currently open
++      const storageData = {};
++      storageData[host] = this.getNamesForHost(host);
++      this.storageActor.update("added", this.typeName, storageData);
++    },
 +
-+    this.hostVsStores.set(host, storeMap);
++    async getStoragePrincipal(extension) {
++      const {
++        backendEnabled,
++        storagePrincipal,
++      } = await this.selectBackendInParent(extension.id);
 +
-+    // Show the storage actor in the add-on storage inspector even when there
-+    // is no extension page currently open
-+    const storageData = {};
-+    storageData[host] = this.getNamesForHost(host);
-+    this.storageActor.update("added", this.typeName, storageData);
-+  },
++      if (!backendEnabled) {
++        // IDB backend disabled; give up.
++        return null;
++      }
++      return storagePrincipal;
++    },
 +
-+  async getStoragePrincipal(extension) {
-+    const {
-+      backendEnabled,
-+      storagePrincipal,
-+    } = await this.selectBackendInParent(extension.id);
++    getValuesForHost(host, name) {
++      const result = [];
 +
-+    if (!backendEnabled) {
-+      // IDB backend disabled; give up.
-+      return null;
-+    }
-+    return storagePrincipal;
-+  },
++      if (!this.hostVsStores.has(host)) {
++        return result;
++      }
 +
-+  getValuesForHost(host, name) {
-+    const result = [];
++      if (name) {
++        return [{name, value: this.hostVsStores.get(host).get(name)}];
++      }
 +
-+    if (!this.hostVsStores.has(host)) {
++      for (const [key, value] of Array.from(this.hostVsStores.get(host).entries())) {
++        result.push({name: key, value});
++      }
 +      return result;
-+    }
++    },
 +
-+    if (name) {
-+      return [{name, value: this.hostVsStores.get(host).get(name)}];
-+    }
-+
-+    for (const [key, value] of Array.from(this.hostVsStores.get(host).entries())) {
-+      result.push({name: key, value});
-+    }
-+    return result;
-+  },
-+
-+  /**
-+   * This method converts the values returned by getValuesForHost into a StoreObject
-+   * (currently based off of this same method for IndexedDB).
-+   */
-+  toStoreObject({name, value}) {
-+    if (!{name, value}) {
-+      return null;
-+    }
-+
-+    // Stringify adds redundant quotes to strings
-+    if (typeof value !== "string") {
-+      // Not all possible values are stringifiable (e.g. functions)
-+      value = JSON.stringify(value) || "Object";
-+    }
-+
-+    // FIXME: Bug 1318029 - Due to a bug that is thrown whenever a
-+    // LongStringActor string reaches DebuggerServer.LONG_STRING_LENGTH we need
-+    // to trim the value. When the bug is fixed we should stop trimming the
-+    // string here.
-+    const maxLength = DebuggerServer.LONG_STRING_LENGTH - 1;
-+    if (value.length > maxLength) {
-+      value = value.substr(0, maxLength);
-+    }
-+
-+    return {
-+      name,
-+      value: new LongStringActor(this.conn, value || ""),
-+    };
-+  },
-+
-+  getFields() {
-+    return [
-+      // name needs to be editable for the addItem case, where a temporary key-value
-+      // pair is created that can later be edited via editItem.
-+      { name: "name", editable: true },
-+      { name: "value", editable: true },
-+    ];
-+  },
-+
-+  async addItem(guid, host) {
-+    const db = this.dbConnectionForHost.get(host);
-+    if (!db) {
-+      return;
-+    }
-+    const changes = await db.set({[guid]: DEFAULT_VALUE});
-+    this.fireOnChangedExtensionEvent(host, changes);
-+  },
-+
-+  async editItem({host, field, items, oldValue}) {
-+    const db = this.dbConnectionForHost.get(host);
-+    if (!db) {
-+      return;
-+    }
-+
-+    const {name, value} = items;
-+    // If the name changed, remove the previous entry in storage by the old name first
-+    if (field === "name") {
-+      const changes = await db.remove(oldValue);
-+      this.fireOnChangedExtensionEvent(host, changes);
-+    }
-+
-+    // Attempt to interpret the data type of the value
-+    let newValue = parseItemValue(name, value);
-+    if (newValue === value) {
-+      try {
-+        newValue = JSON.parse(value);
-+      } catch (error) {
-+        // Value couldn't be parsed; just use what we started with
-+        newValue = value;
++    /**
++     * This method converts the values returned by getValuesForHost into a StoreObject
++     * (currently based off of this same method for IndexedDB).
++     */
++    toStoreObject({name, value}) {
++      if (!{name, value}) {
++        return null;
 +      }
-+    }
 +
-+    const changes = await db.set({[name]: newValue});
-+    this.fireOnChangedExtensionEvent(host, changes);
-+  },
++      // Stringify adds redundant quotes to strings
++      if (typeof value !== "string") {
++        // Not all possible values are stringifiable (e.g. functions)
++        value = JSON.stringify(value) || "Object";
++      }
 +
-+  async removeItem(host, name) {
-+    const db = this.dbConnectionForHost.get(host);
-+    if (!db) {
-+      return;
-+    }
++      // FIXME: Bug 1318029 - Due to a bug that is thrown whenever a
++      // LongStringActor string reaches DebuggerServer.LONG_STRING_LENGTH we need
++      // to trim the value. When the bug is fixed we should stop trimming the
++      // string here.
++      const maxLength = DebuggerServer.LONG_STRING_LENGTH - 1;
++      if (value.length > maxLength) {
++        value = value.substr(0, maxLength);
++      }
 +
-+    const changes = await db.remove(name);
-+    this.fireOnChangedExtensionEvent(host, changes);
-+  },
++      return {
++        name,
++        value: new LongStringActor(this.conn, value || ""),
++      };
++    },
 +
-+  async removeAll(host) {
-+    const db = this.dbConnectionForHost.get(host);
-+    if (!db) {
-+      return;
-+    }
++    getFields() {
++      return [
++        // name needs to be editable for the addItem case, where a temporary key-value
++        // pair is created that can later be edited via editItem.
++        { name: "name", editable: true },
++        { name: "value", editable: true },
++      ];
++    },
 +
-+    const changes = await db.clear();
-+    this.fireOnChangedExtensionEvent(host, changes);
-+  },
++    async addItem(guid, host) {
++      const db = this.dbConnectionForHost.get(host);
++      if (!db) {
++        return;
++      }
++      const changes = await db.set({[guid]: DEFAULT_VALUE});
++      this.fireOnChangedExtensionEvent(host, changes);
++    },
 +
-+  /**
-+  * Let the extension know that storage data has been changed by the user from
-+  * the storage inspector.
-+  */
-+  fireOnChangedExtensionEvent(host, changes) {
-+    const uuid = (new URL(host)).host;
-+    Services.cpmm.sendAsyncMessage(`Extension:StorageLocalOnChanged:${uuid}`,
-+                                   changes);
-+  },
-+});
++    async editItem({host, field, items, oldValue}) {
++      const db = this.dbConnectionForHost.get(host);
++      if (!db) {
++        return;
++      }
++
++      const {name, value} = items;
++      // If the name changed, remove the previous entry in storage by the old name first
++      if (field === "name") {
++        const changes = await db.remove(oldValue);
++        this.fireOnChangedExtensionEvent(host, changes);
++      }
++
++      // Attempt to interpret the data type of the value
++      let newValue = parseItemValue(name, value);
++      if (newValue === value) {
++        try {
++          newValue = JSON.parse(value);
++        } catch (error) {
++          // Value couldn't be parsed; just use what we started with
++          newValue = value;
++        }
++      }
++
++      const changes = await db.set({[name]: newValue});
++      this.fireOnChangedExtensionEvent(host, changes);
++    },
++
++    async removeItem(host, name) {
++      const db = this.dbConnectionForHost.get(host);
++      if (!db) {
++        return;
++      }
++
++      const changes = await db.remove(name);
++      this.fireOnChangedExtensionEvent(host, changes);
++    },
++
++    async removeAll(host) {
++      const db = this.dbConnectionForHost.get(host);
++      if (!db) {
++        return;
++      }
++
++      const changes = await db.clear();
++      this.fireOnChangedExtensionEvent(host, changes);
++    },
++
++    /**
++    * Let the extension know that storage data has been changed by the user from
++    * the storage inspector.
++    */
++    fireOnChangedExtensionEvent(host, changes) {
++      const uuid = (new URL(host)).host;
++      Services.cpmm.sendAsyncMessage(`Extension:StorageLocalOnChanged:${uuid}`,
++                                     changes);
++    },
++  });
++}
 +
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2688,9 +3135,12 @@ const StorageActor = protocol.ActorClass
+@@ -2688,9 +3138,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -719,7 +735,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,764 @@
+@@ -0,0 +1,795 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -746,11 +762,18 @@ new file mode 100644
 +
 +const LEAVE_UUID_PREF = "extensions.webextensions.keepUuidOnUninstall";
 +const LEAVE_STORAGE_PREF = "extensions.webextensions.keepStorageOnUninstall";
++const EXTENSION_STORAGE_ENABLED_PREF = "devtools.storage.extensionStorage.enabled";
 +
 +AddonTestUtils.init(this);
 +createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 +
 +ExtensionTestUtils.init(this);
++
++// This storage actor is gated behind a pref, so make sure it is enabled first
++Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, true);
++registerCleanupFunction(() => {
++  Services.prefs.clearUserPref(EXTENSION_STORAGE_ENABLED_PREF);
++});
 +
 +/**
 +* Starts up and connects the Debugger server to the DevTools client (both in the main
@@ -912,8 +935,10 @@ new file mode 100644
 +  await extension.startup();
 +
 +  const {target} = await setupExtensionDebugging(extension.id);
++
 +  const extensionStorage = await getExtensionStorage(target);
 +  ok(extensionStorage, "Should have an extensionStorage store");
++
 +  await shutdown(extension, target);
 +});
 +
@@ -1280,8 +1305,8 @@ new file mode 100644
 +});
 +
 +add_task(function cleanup_for_test_local_storage_ext_data_added_prior_to_ext_startup() {
-+  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
-+  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
++  Services.prefs.clearUserPref(LEAVE_UUID_PREF);
++  Services.prefs.clearUserPref(LEAVE_STORAGE_PREF);
 +});
 +
 +/**
@@ -1480,6 +1505,28 @@ new file mode 100644
 +      {name: "c", value: {str: "{\"d\":456}"}},
 +    ],
 +    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/*
++* This task should be last, as it sets a pref to disable the extensionStorage
++* storage actor. Since this pref is set at the beginning of the file, it
++* already will be cleared via registerCleanupFunction when the test finishes.
++*/
++add_task(async function test_extension_store_disabled_on_pref() {
++  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
++
++  await extension.startup();
++
++  const {target} = await setupExtensionDebugging(extension.id);
++
++  Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, false);
++  const extensionStorage = await getExtensionStorage(target);
++  ok(
++    extensionStorage === null,
++    "Should not have an extensionStorage store when pref disabled"
 +  );
 +
 +  await shutdown(extension, target);
