@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID aa7bf6e9a770d90dc3311e2c49a6eab5b7253386
+# Node ID f34e54e6578a3ef7ead2505e1c633659c0033386
 # Parent  9b2f851979cb8d0dd0cd2618656eddee32e4f143
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -19,6 +19,28 @@ diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
  // Dictionary download preference
  pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/language-tools/");
  
+diff --git a/devtools/client/locales/en-US/storage.properties b/devtools/client/locales/en-US/storage.properties
+--- a/devtools/client/locales/en-US/storage.properties
++++ b/devtools/client/locales/en-US/storage.properties
+@@ -31,6 +31,7 @@ tree.labels.localStorage=Local Storage
+ tree.labels.sessionStorage=Session Storage
+ tree.labels.indexedDB=Indexed DB
+ tree.labels.Cache=Cache Storage
++tree.labels.extensionStorage=Extension Storage
+ 
+ # LOCALIZATION NOTE (table.headers.*.*):
+ # These strings are the header names of the columns in the Storage Table for
+@@ -67,6 +68,10 @@ table.headers.indexedDB.keyPath2=Key Pat
+ table.headers.indexedDB.autoIncrement=Auto Increment
+ table.headers.indexedDB.indexes=Indexes
+ 
++table.headers.extensionStorage.area=Storage Area
++table.headers.extensionStorage.name=Key
++table.headers.extensionStorage.value=Value
++
+ # LOCALIZATION NOTE (label.expires.session):
+ # This string is displayed in the expires column when the cookie is Session
+ # Cookie
 diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
 --- a/devtools/client/shared/vendor/moz.build
 +++ b/devtools/client/shared/vendor/moz.build
@@ -265,7 +287,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1305,449 @@ StorageActors.createActor({
+@@ -1298,6 +1305,451 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -629,6 +651,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      }
 +
 +      return {
++        area: "local",
 +        name,
 +        value: new LongStringActor(this.conn, value || ""),
 +      };
@@ -636,6 +659,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +    getFields() {
 +      return [
++        { name: "area", editable: false },
 +        // name needs to be editable for the addItem case, where a temporary key-value
 +        // pair is created that can later be edited via editItem.
 +        { name: "name", editable: true },
@@ -715,7 +739,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2688,9 +3138,12 @@ const StorageActor = protocol.ActorClass
+@@ -2688,9 +3140,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -735,7 +759,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,795 @@
+@@ -0,0 +1,792 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -997,11 +1021,11 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data, [
-+      {name: "a", value: {str: "123"}},
-+      {name: "b", value: {str: "[4,5]"}},
-+      {name: "c", value: {str: "{\"d\":678}"}},
-+      {name: "d", value: {str: "true"}},
-+      {name: "e", value: {str: "hi"}},
++      {area: "local", name: "a", value: {str: "123"}},
++      {area: "local", name: "b", value: {str: "[4,5]"}},
++      {area: "local", name: "c", value: {str: "{\"d\":678}"}},
++      {area: "local", name: "d", value: {str: "true"}},
++      {area: "local", name: "e", value: {str: "hi"}},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1038,7 +1062,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1078,7 +1102,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1121,7 +1145,7 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1131,7 +1155,7 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "The results are unchanged when an extension page adds duplicate items"
 +  );
 +
@@ -1187,7 +1211,7 @@ new file mode 100644
 +      await extensionStorage.editItem({
 +        host,
 +        field: "value",
-+        items: {name: key, value: newVal},
++        items: {area: "local", name: key, value: newVal},
 +        oldValue,
 +      });
 +    }
@@ -1200,10 +1224,7 @@ new file mode 100644
 +      // LongStringActor for the view (by way of `toStoreObject`, the
 +      // value's data type in the database is unchanged, as demonstrated
 +      // by the next assertion in the test extension.
-+      [{
-+        name: key,
-+        value: {str: parsedVal || newVal},
-+      }],
++      [{area: "local", name: key, value: {str: parsedVal || newVal}}],
 +      "Got the expected results on populated storage.local"
 +    );
 +
@@ -1280,7 +1301,7 @@ new file mode 100644
 +  let {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1292,8 +1313,8 @@ new file mode 100644
 +  Assert.deepEqual(
 +    data,
 +    [
-+      {name: "a", value: {str: "123"}},
-+      {name: "b", value: {str: "456"}},
++      {area: "local", name: "a", value: {str: "123"}},
++      {area: "local", name: "b", value: {str: "456"}},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1367,7 +1388,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1435,7 +1456,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1501,8 +1522,8 @@ new file mode 100644
 +  Assert.deepEqual(
 +    data,
 +    [
-+      {name: "a", value: {str: "{\"b\":123}"}},
-+      {name: "c", value: {str: "{\"d\":456}"}},
++      {area: "local", name: "a", value: {str: "{\"b\":123}"}},
++      {area: "local", name: "c", value: {str: "{\"d\":456}"}},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1556,20 +1577,15 @@ diff --git a/devtools/shared/moz.build b/devtools/shared/moz.build
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
-@@ -163,6 +163,40 @@ createStorageSpec({
+@@ -163,6 +163,25 @@ createStorageSpec({
    methods: storageMethods,
  });
  
-+// TODO: create a new storeObjectType, since extension storage is less
-+// restrictive than localStorage/sessionStorage and more restrictive than
-+// IndexedDB.
-+// Extension store object
 +types.addDictType("extensionobject", {
 +  name: "nullable:string",
 +  value: "nullable:longstring",
 +});
 +
-+// Array of Extension Storage store objects
 +types.addDictType("extensionstoreobject", {
 +  total: "number",
 +  offset: "number",
@@ -1580,17 +1596,7 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 +  typeName: "extensionStorage",
 +  storeObjectType: "extensionstoreobject",
 +  methods: {
-+    // TODO: May want to define storageMethods differently compared to
-+    // localStorage and sessionStorage...
 +    ...storageMethods,
-+    addExtensionStorageListeners: {
-+      request: {},
-+      response: {},
-+    },
-+    removeExtensionStorageListeners: {
-+      request: {},
-+      response: {},
-+    },
 +  },
 +});
 +
