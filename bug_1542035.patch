@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID d07c3b1ebf44d7aa412f438d8012f9a349eea274
-# Parent  9b2f851979cb8d0dd0cd2618656eddee32e4f143
+# Node ID 52ddae340971812899c4549e2f2ab607c34916ca
+# Parent  2bb77ed1fcc5ad06f91612d419160f54c09369db
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
@@ -287,7 +287,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1298,6 +1305,451 @@ StorageActors.createActor({
+@@ -1300,6 +1307,468 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -517,10 +517,12 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        }
 +
 +        let action;
-+        if (typeof newValue === "undefined") {
++        if (this.hostVsStores.get(host).get(key) !== undefined
++          && typeof newValue === "undefined") {
 +          action = "deleted";
 +          storeMap.delete(key);
-+        } else if (typeof oldValue === "undefined") {
++        } else if (this.hostVsStores.get(host).get(key) === undefined
++          && typeof oldValue === "undefined") {
 +          action = "added";
 +          storeMap.set(key, newValue);
 +        } else {
@@ -627,18 +629,33 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    },
 +
 +    /**
-+     * This method converts the values returned by getValuesForHost into a StoreObject
-+     * (currently based off of this same method for IndexedDB).
++     * Converts a storage item to an "extensionobject" as defined in
++     * devtools/shared/specs/storage.js
++     * @param {Object} item - The storage item to convert
++     * @param {String} item.name - The storage item key
++     * @param {*} item.value - The storage item value
++     * @return {extensionobject}
 +     */
-+    toStoreObject({name, value}) {
-+      if (!{name, value}) {
++    toStoreObject(item) {
++      if (!item) {
 +        return null;
 +      }
 +
-+      // Stringify adds redundant quotes to strings
++      let {name, value} = item;
++
 +      if (typeof value !== "string") {
-+        // Not all possible values are stringifiable (e.g. functions)
-+        value = JSON.stringify(value) || "Object";
++        if (value instanceof RegExp) {
++          value = value.toSource();
++        } else if (value instanceof Date) {
++          value = value.toJSON();
++        } else {
++          try {
++            value = JSON.stringify(value) || String(value);
++          } catch (error) {
++            // throws for typeof bigint
++            value = String(value);
++          }
++        }
 +      }
 +
 +      // FIXME: Bug 1318029 - Due to a bug that is thrown whenever a
@@ -651,19 +668,19 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      }
 +
 +      return {
-+        area: "local",
 +        name,
 +        value: new LongStringActor(this.conn, value || ""),
++        area: "local",
 +      };
 +    },
 +
 +    getFields() {
 +      return [
-+        { name: "area", editable: false },
 +        // name needs to be editable for the addItem case, where a temporary key-value
 +        // pair is created that can later be edited via editItem.
 +        { name: "name", editable: true },
 +        { name: "value", editable: true },
++        { name: "area", editable: false },
 +      ];
 +    },
 +
@@ -690,17 +707,17 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      }
 +
 +      // Attempt to interpret the data type of the value
-+      let newValue = parseItemValue(name, value);
-+      if (newValue === value) {
++      let parsedValue = parseItemValue(name, value);
++      if (parsedValue === value) {
 +        try {
-+          newValue = JSON.parse(value);
++          parsedValue = JSON.parse(value);
 +        } catch (error) {
 +          // Value couldn't be parsed; just use what we started with
-+          newValue = value;
++          parsedValue = value;
 +        }
 +      }
 +
-+      const changes = await db.set({[name]: newValue});
++      const changes = await db.set({[name]: parsedValue});
 +      this.fireOnChangedExtensionEvent(host, changes);
 +    },
 +
@@ -739,7 +756,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2688,9 +3140,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3159,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -755,7 +772,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2745,6 +3200,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3219,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
@@ -773,7 +790,7 @@ diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/b
 @@ -127,6 +127,7 @@ skip-if = e10s # Bug 1183605 - devtools/
  [browser_storage_listings.js]
  [browser_storage_updates.js]
- skip-if = (verify && debug && (os == 'mac' || os == 'linux'))
+ skip-if = (verify && debug && (os == 'mac' || os == 'linux')) || (os == 'win' && debug) # Bug 1493369
 +[browser_storage_webext_storage_local.js]
  [browser_stylesheets_getTextEmpty.js]
  [browser_stylesheets_nested-iframes.js]
@@ -819,7 +836,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,792 @@
+@@ -0,0 +1,802 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -1075,6 +1092,11 @@ new file mode 100644
 +    c: {d: 678},
 +    d: true,
 +    e: "hi",
++    f: null,
++    g: undefined,
++    h: new Date(0),
++    i: /regexp/,
++    j: 1n,
 +  });
 +  await extension.awaitMessage("storage-local-set:done");
 +
@@ -1086,6 +1108,11 @@ new file mode 100644
 +      {area: "local", name: "c", value: {str: "{\"d\":678}"}},
 +      {area: "local", name: "d", value: {str: "true"}},
 +      {area: "local", name: "e", value: {str: "hi"}},
++      {area: "local", name: "f", value: {str: "null"}},
++      {area: "local", name: "g", value: {str: "undefined"}},
++      {area: "local", name: "h", value: {str: "1970-01-01T00:00:00.000Z"}},
++      {area: "local", name: "i", value: {str: "/regexp/"}},
++      {area: "local", name: "j", value: {str: "1"}},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
