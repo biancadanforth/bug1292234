@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 52ddae340971812899c4549e2f2ab607c34916ca
+# Node ID 578d7124b1630a7bacefda4db664de5ce08f1c39
 # Parent  2bb77ed1fcc5ad06f91612d419160f54c09369db
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -287,13 +287,60 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1307,468 @@ StorageActors.createActor({
+@@ -1300,6 +1307,516 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
 +const extensionStorageHelpers = {
 +  unresolvedPromises: new Map(),
 +  onChangedListeners: new Map(),
++  typesFromString: { // Helper methods to parse string values in editItem
++    jsonifiable: {
++      test(str) {
++        try {
++          JSON.parse(str);
++        } catch (e) {
++          return false;
++        }
++        return true;
++      },
++      parse(str) {
++        return JSON.parse(str);
++      },
++    },
++    bigInt: {
++      test(str) {
++        return /^\d+n{1}$/.test(str);
++      },
++      parse(str) {
++        return BigInt(str.replace("n", ""));
++      },
++    },
++    date: {
++      test(str) {
++        return !isNaN(Date.parse(str));
++      },
++      parse(str) {
++        return new Date(Date.parse(str));
++      },
++    },
++    regexp: {
++      test(str) {
++        if (!/^\/{1}/.test(str)) {
++          return false;
++        }
++        try {
++          new RegExp(str);
++        } catch (e) {
++          return false;
++        }
++        return true;
++      },
++      parse(str) {
++        return new RegExp(str);
++      },
++    },
++  },
 +
 +  // Sets the parent process message manager
 +  setPpmm(ppmm) {
@@ -653,7 +700,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +            value = JSON.stringify(value) || String(value);
 +          } catch (error) {
 +            // throws for typeof bigint
-+            value = String(value);
++            value = value.toString();
 +          }
 +        }
 +      }
@@ -709,11 +756,12 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      // Attempt to interpret the data type of the value
 +      let parsedValue = parseItemValue(name, value);
 +      if (parsedValue === value) {
-+        try {
-+          parsedValue = JSON.parse(value);
-+        } catch (error) {
-+          // Value couldn't be parsed; just use what we started with
-+          parsedValue = value;
++        const {typesFromString} = extensionStorageHelpers;
++        for (const {test, parse} of Object.values(typesFromString)) {
++          if (test(value)) {
++            parsedValue = parse(value);
++            break;
++          }
 +        }
 +      }
 +
@@ -756,7 +804,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3159,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3207,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -772,7 +820,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3219,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3267,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
