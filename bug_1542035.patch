@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 578d7124b1630a7bacefda4db664de5ce08f1c39
-# Parent  2bb77ed1fcc5ad06f91612d419160f54c09369db
+# Node ID f6a7dc1a7deb72864949733e10a9aee01de4aaa9
+# Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
 diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
@@ -60,6 +60,112 @@ diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/ve
      'jszip.js',
      'lodash.js',
      'react-dom-factories.js',
+diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/shared/widgets/TableWidget.js
+--- a/devtools/client/shared/widgets/TableWidget.js
++++ b/devtools/client/shared/widgets/TableWidget.js
+@@ -59,7 +59,7 @@ Object.defineProperty(this, "EVENTS", {
+  *        - cellContextMenuId: ID of a <menupopup> element to be set as a
+  *                             context menu of every cell.
+  */
+-function TableWidget(node, options = {}) {
++function TableWidget(node, options = {}, front) {
+   EventEmitter.decorate(this);
+ 
+   this.document = node.ownerDocument;
+@@ -92,6 +92,8 @@ function TableWidget(node, options = {})
+   this.items = new Map();
+   this.columns = new Map();
+ 
++  this.front = front;
++
+   // Setup the column headers context menu to allow users to hide columns at
+   // will.
+   if (this.removableColumns) {
+@@ -246,6 +248,17 @@ TableWidget.prototype = {
+     return filter(columns);
+   },
+ 
++  /*
++  * Get the storageFront for the given storage actor type.
++  */
++  async setStorageFront(type) {
++    if (this._editableFieldsEngine) {
++      const stores = await this.front.listStores();
++      const storageFront = stores[type];
++      this._editableFieldsEngine.setStorageFront(storageFront);
++    }
++  },
++
+   /**
+    * Emit all cell edit events.
+    */
+@@ -589,13 +602,19 @@ TableWidget.prototype = {
+ 
+     if (this._editableFieldsEngine) {
+       this._editableFieldsEngine.selectors = selectors;
++      this._editableFieldsEngine.front = this.front;
++      this._editableFieldsEngine.host = this.host;
+     } else {
+-      this._editableFieldsEngine = new EditableFieldsEngine({
+-        root: this.tbody,
+-        onTab: this.onEditorTab,
+-        onTriggerEvent: "dblclick",
+-        selectors: selectors,
+-      });
++      this._editableFieldsEngine = new EditableFieldsEngine(
++        {
++          root: this.tbody,
++          onTab: this.onEditorTab,
++          onTriggerEvent: "dblclick",
++          selectors: selectors,
++          front: this.front,
++          host: this.host,
++        },
++      );
+ 
+       this._editableFieldsEngine.on("change", this.onChange);
+       this._editableFieldsEngine.on("destroyed", this.onEditorDestroyed);
+@@ -1720,6 +1739,9 @@ function EditableFieldsEngine(options) {
+ 
+   this.onTrigger = this.onTrigger.bind(this);
+   this.root.addEventListener(this.onTriggerEvent, this.onTrigger);
++
++  this.front = options.front;
++  this.host = options.host;
+ }
+ 
+ EditableFieldsEngine.prototype = {
+@@ -1792,17 +1814,29 @@ EditableFieldsEngine.prototype = {
+     }
+   },
+ 
++  setStorageFront: function(front) {
++    this.storageFront = front;
++  },
++
+   /**
+    * Overlay the target node with an edit field.
+    *
+    * @param  {Node} target
+    *         Dom node to be edited.
+    */
+-  edit: function(target) {
++  edit: async function(target) {
+     if (!target) {
+       return;
+     }
+ 
++    // Some values are not parsable by the client or server so should not be editable
++    if (this.storageFront && "isEditable" in this.storageFront) {
++      const name = target.getAttribute("data-id");
++      if (!(await this.storageFront.isEditable(this.host, name))) {
++        return;
++      }
++    }
++
+     target.scrollIntoView(false);
+     target.focus();
+ 
 diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
 --- a/devtools/client/storage/ui.js
 +++ b/devtools/client/storage/ui.js
@@ -89,31 +195,52 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
  
  // Maximum length of item name to show in context menu label - will be
  // trimmed with ellipsis if it's longer.
-@@ -756,7 +753,10 @@ class StorageUI {
+@@ -99,11 +96,15 @@ class StorageUI {
+     this.tree.on("select", this.onHostSelect);
+ 
+     const tableNode = this._panelDoc.getElementById("storage-table");
+-    this.table = new TableWidget(tableNode, {
+-      emptyText: L10N.getStr("table.emptyText"),
+-      highlightUpdated: true,
+-      cellContextMenuId: "storage-table-popup",
+-    });
++    this.table = new TableWidget(
++      tableNode,
++      {
++        emptyText: L10N.getStr("table.emptyText"),
++        highlightUpdated: true,
++        cellContextMenuId: "storage-table-popup",
++      },
++      this.front,
++    );
+ 
+     this.updateObjectSidebar = this.updateObjectSidebar.bind(this);
+     this.table.on(TableWidget.EVENTS.ROW_SELECTED, this.updateObjectSidebar);
+@@ -756,7 +757,10 @@ class StorageUI {
        itemVar.setGrip(value);
  
        // May be the item value is a json or a key value pair itself
 -      this.parseItemValue(item.name, value);
-+      const obj = parseItemValue(item.name, value);
++      const obj = parseItemValue(value);
 +      if (typeof obj === "object") {
 +        this.populateSidebar(item.name, obj);
 +      }
  
        // By default the item name and value are shown. If this is the only
        // information available, then nothing else is to be displayed.
-@@ -789,7 +789,10 @@ class StorageUI {
+@@ -789,7 +793,10 @@ class StorageUI {
          }
  
          mainScope.addItem(key, {}, true).setGrip(item[key]);
 -        this.parseItemValue(key, item[key]);
-+        const obj = parseItemValue(key, item[key]);
++        const obj = parseItemValue(item[key]);
 +        if (typeof obj === "object") {
 +          this.populateSidebar(item.name, obj);
 +        }
        }
      }
  
-@@ -825,47 +828,13 @@ class StorageUI {
+@@ -825,47 +832,13 @@ class StorageUI {
      return host;
    }
  
@@ -166,7 +293,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
      const jsonObject = Object.create(null);
      const view = this.view;
      jsonObject[name] = obj;
-@@ -879,97 +848,6 @@ class StorageUI {
+@@ -879,97 +852,6 @@ class StorageUI {
    }
  
    /**
@@ -264,10 +391,19 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
     * Select handler for the storage tree. Fetches details of the selected item
     * from the storage details and populates the storage tree.
     *
+@@ -990,6 +872,8 @@ class StorageUI {
+     this.table.host = host;
+     this.table.datatype = type;
+ 
++    await this.table.setStorageFront(type);
++
+     this.updateToolbar();
+ 
+     let names = null;
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,12 +12,19 @@ const Services = require("Services");
+@@ -12,12 +12,21 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
@@ -275,6 +411,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
 +const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
 +const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
++
++const lodash = require("devtools/client/shared/vendor/lodash");
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
@@ -287,7 +425,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1307,516 @@ StorageActors.createActor({
+@@ -1300,6 +1309,566 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -339,6 +477,39 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      parse(str) {
 +        return new RegExp(str);
 +      },
++    },
++  },
++  supportedTypes: { // Helper methods to determine the value type of an item in isEditable
++    isArray: function(value) {
++      return Array.isArray(value);
++    },
++    isBigint: function(value) {
++      // eslint-disable-next-line
++      return typeof value === "bigint";
++    },
++    isBoolean: function(value) {
++      return typeof value === "boolean";
++    },
++    isDate: function(value) {
++      return lodash.isDate(value);
++    },
++    isNull: function(value) {
++      return value === null;
++    },
++    isNumber: function(value) {
++      return typeof value === "number";
++    },
++    isObject: function(value) {
++      return lodash.isPlainObject(value);
++    },
++    isRegexp: function(value) {
++      return lodash.isRegExp(value);
++    },
++    isString: function(value) {
++      return typeof value === "string";
++    },
++    isUndefined: function(value) {
++      return typeof value === "undefined";
 +    },
 +  },
 +
@@ -731,6 +902,23 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      ];
 +    },
 +
++    /**
++    * Editing is supported only for serializable value types. Examples of unserializable
++    * types include Map, Set and ArrayBuffer.
++    */
++    async isEditable(host, name) {
++      const db = this.dbConnectionForHost.get(host);
++      const item = await db.get([name]);
++      const value = item[name];
++      const {supportedTypes} = extensionStorageHelpers;
++      for (const isSupportedType of Object.values(supportedTypes)) {
++        if (isSupportedType(value)) {
++          return true;
++        }
++      }
++      return false;
++    },
++
 +    async addItem(guid, host) {
 +      const db = this.dbConnectionForHost.get(host);
 +      if (!db) {
@@ -754,7 +942,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      }
 +
 +      // Attempt to interpret the data type of the value
-+      let parsedValue = parseItemValue(name, value);
++      let parsedValue = parseItemValue(value);
 +      if (parsedValue === value) {
 +        const {typesFromString} = extensionStorageHelpers;
 +        for (const {test, parse} of Object.values(typesFromString)) {
@@ -804,7 +992,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3207,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3259,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -820,7 +1008,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3267,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3319,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
@@ -1712,7 +1900,7 @@ diff --git a/devtools/shared/moz.build b/devtools/shared/moz.build
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
-@@ -163,6 +163,25 @@ createStorageSpec({
+@@ -163,6 +163,34 @@ createStorageSpec({
    methods: storageMethods,
  });
  
@@ -1732,6 +1920,15 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 +  storeObjectType: "extensionstoreobject",
 +  methods: {
 +    ...storageMethods,
++    isEditable: {
++      request: {
++        host: Arg(0, "string"),
++        name: Arg(1, "string"),
++      },
++      response: {
++        value: RetVal("boolean"),
++      },
++    },
 +  },
 +});
 +
@@ -1760,7 +1957,7 @@ diff --git a/devtools/shared/storage/utils.js b/devtools/shared/storage/utils.js
 new file mode 100644
 --- /dev/null
 +++ b/devtools/shared/storage/utils.js
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,146 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1867,12 +2064,10 @@ new file mode 100644
 + * Tries to parse a string value into either a json or a key-value separated
 + * object. The value can also be a key separated array.
 + *
-+ * @param {string} name
-+ *        The key corresponding to the `value` string in the object
 + * @param {string} originalValue
 + *        The string to be parsed into an object
 + */
-+function parseItemValue(name, originalValue) {
++function parseItemValue(originalValue) {
 +  // Find if value is URLEncoded ie
 +  let decodedValue = "";
 +  try {
