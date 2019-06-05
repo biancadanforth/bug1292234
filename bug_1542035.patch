@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 54dd63f486bfc47501e26107909f689e4e625a55
+# Node ID 8df17140b018565e293b3b6d6d3edd65a7a71618
 # Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -19,6 +19,137 @@ diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
  // Dictionary download preference
  pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/language-tools/");
  
+diff --git a/devtools/client/framework/target.js b/devtools/client/framework/target.js
+--- a/devtools/client/framework/target.js
++++ b/devtools/client/framework/target.js
+@@ -14,6 +14,31 @@ const targets = new WeakMap();
+  * Functions for creating Targets
+  */
+ exports.TargetFactory = {
++  /**
++  * Spawn a DebuggerServer in the parent process
++  */
++  _createLocalServer() {
++    // Since a remote protocol connection will be made, let's start the
++    // DebuggerServer here, once and for all tools.
++    DebuggerServer.init();
++
++    // When connecting to a local tab, we only need the root actor.
++    // Then we are going to call DebuggerServer.connectToFrame and talk
++    // directly with actors living in the child process.
++    // We also need browser actors for actor registry which enabled addons
++    // to register custom actors.
++    // TODO: the comment and implementation are out of sync here. See Bug 1420134.
++    DebuggerServer.registerAllActors();
++    // Enable being able to get child process actors
++    DebuggerServer.allowChromeProcess = true;
++  },
++
++  /**
++  * Create aDebuggerClient and connect it to this local DebuggerServer
++  */
++  _createLocalClient() {
++    return new DebuggerClient(DebuggerServer.connectPipe());
++  },
+ 
+   /**
+    * Construct a Target. The target will be cached for each Tab so that we create only
+@@ -46,8 +71,6 @@ exports.TargetFactory = {
+    * Instantiate a target for the given tab.
+    *
+    * This will automatically:
+-   * - spawn a DebuggerServer in the parent process,
+-   * - create a DebuggerClient and connect it to this local DebuggerServer,
+    * - call RootActor's `getTab` request to retrieve the FrameTargetActor's form,
+    * - instantiate a Target instance.
+    *
+@@ -57,28 +80,8 @@ exports.TargetFactory = {
+    * @return A target object
+    */
+   async createTargetForTab(tab) {
+-    function createLocalServer() {
+-      // Since a remote protocol connection will be made, let's start the
+-      // DebuggerServer here, once and for all tools.
+-      DebuggerServer.init();
+-
+-      // When connecting to a local tab, we only need the root actor.
+-      // Then we are going to call DebuggerServer.connectToFrame and talk
+-      // directly with actors living in the child process.
+-      // We also need browser actors for actor registry which enabled addons
+-      // to register custom actors.
+-      // TODO: the comment and implementation are out of sync here. See Bug 1420134.
+-      DebuggerServer.registerAllActors();
+-      // Enable being able to get child process actors
+-      DebuggerServer.allowChromeProcess = true;
+-    }
+-
+-    function createLocalClient() {
+-      return new DebuggerClient(DebuggerServer.connectPipe());
+-    }
+-
+-    createLocalServer();
+-    const client = createLocalClient();
++    this._createLocalServer();
++    const client = this._createLocalClient();
+ 
+     // Connect the local client to the local server
+     await client.connect();
+@@ -97,4 +100,55 @@ exports.TargetFactory = {
+   isKnownTab: function(tab) {
+     return targets.has(tab);
+   },
++
++  /**
++   * Construct a Target. The target will be cached for each addon so that we create only
++   * one per addon.
++   *
++   * @param {Object} addon
++   *        An addon object with a single 'id' key corresponding to the addon id. We use an object
++   *        here instead of a string to make use of the same `targets` WeakMap used by tab targets.
++   *
++   * @return A target object
++   */
++  forAddon: async function(addon) {
++    let target = targets.get(addon);
++    if (target) {
++      return target;
++    }
++    const promise = this.createTargetForAddon(addon);
++    // Immediately set the target's promise in cache to prevent race
++    targets.set(addon, promise);
++    target = await promise;
++    // Then replace the promise with the target object
++    targets.set(addon, target);
++    target.once("close", () => {
++      targets.delete(addon);
++    });
++    return target;
++  },
++
++  /**
++   * Instantiate a target for the given addon.
++   *
++   * This will automatically:
++   * - call RootActor's `getAddon` request to retrieve the WebExtension target actor's form,
++   * - instantiate a Target instance.
++   *
++   * @param {Object} addon
++   *        An addon object with a single 'id' key corresponding to the addon id.
++   *
++   * @return A target object
++   */
++  async createTargetForAddon(addon) {
++    this._createLocalServer();
++    const client = this._createLocalClient();
++
++    // Connect the local client to the local server
++    await client.connect();
++
++    // Fetch the WebExtensionActor's target
++    const front = await client.mainRoot.getAddon(addon);
++    return front.connect();
++  },
+ };
 diff --git a/devtools/client/locales/en-US/storage.properties b/devtools/client/locales/en-US/storage.properties
 --- a/devtools/client/locales/en-US/storage.properties
 +++ b/devtools/client/locales/en-US/storage.properties
@@ -63,48 +194,11 @@ diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/ve
 diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/shared/widgets/TableWidget.js
 --- a/devtools/client/shared/widgets/TableWidget.js
 +++ b/devtools/client/shared/widgets/TableWidget.js
-@@ -59,7 +59,7 @@ Object.defineProperty(this, "EVENTS", {
-  *        - cellContextMenuId: ID of a <menupopup> element to be set as a
-  *                             context menu of every cell.
-  */
--function TableWidget(node, options = {}) {
-+function TableWidget(node, options = {}, front) {
-   EventEmitter.decorate(this);
- 
-   this.document = node.ownerDocument;
-@@ -92,6 +92,8 @@ function TableWidget(node, options = {})
-   this.items = new Map();
-   this.columns = new Map();
- 
-+  this.front = front;
-+
-   // Setup the column headers context menu to allow users to hide columns at
-   // will.
-   if (this.removableColumns) {
-@@ -246,6 +248,17 @@ TableWidget.prototype = {
-     return filter(columns);
-   },
- 
-+  /*
-+  * Get the storageFront for the given storage actor type.
-+  */
-+  async setStorageFront(type) {
-+    if (this._editableFieldsEngine) {
-+      const stores = await this.front.listStores();
-+      const storageFront = stores[type];
-+      this._editableFieldsEngine.setStorageFront(storageFront);
-+    }
-+  },
-+
-   /**
-    * Emit all cell edit events.
-    */
-@@ -589,13 +602,19 @@ TableWidget.prototype = {
+@@ -589,13 +589,17 @@ TableWidget.prototype = {
  
      if (this._editableFieldsEngine) {
        this._editableFieldsEngine.selectors = selectors;
-+      this._editableFieldsEngine.front = this.front;
-+      this._editableFieldsEngine.host = this.host;
++      this._editableFieldsEngine.items = this.items;
      } else {
 -      this._editableFieldsEngine = new EditableFieldsEngine({
 -        root: this.tbody,
@@ -118,54 +212,269 @@ diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/sha
 +          onTab: this.onEditorTab,
 +          onTriggerEvent: "dblclick",
 +          selectors: selectors,
-+          front: this.front,
-+          host: this.host,
++          items: this.items,
 +        },
 +      );
  
        this._editableFieldsEngine.on("change", this.onChange);
        this._editableFieldsEngine.on("destroyed", this.onEditorDestroyed);
-@@ -1720,6 +1739,9 @@ function EditableFieldsEngine(options) {
+@@ -1713,6 +1717,7 @@ function EditableFieldsEngine(options) {
+   this.selectors = options.selectors;
+   this.onTab = options.onTab;
+   this.onTriggerEvent = options.onTriggerEvent || "dblclick";
++  this.items = options.items;
  
-   this.onTrigger = this.onTrigger.bind(this);
-   this.root.addEventListener(this.onTriggerEvent, this.onTrigger);
-+
-+  this.front = options.front;
-+  this.host = options.host;
- }
- 
- EditableFieldsEngine.prototype = {
-@@ -1792,17 +1814,29 @@ EditableFieldsEngine.prototype = {
-     }
-   },
- 
-+  setStorageFront: function(front) {
-+    this.storageFront = front;
-+  },
-+
-   /**
-    * Overlay the target node with an edit field.
-    *
-    * @param  {Node} target
-    *         Dom node to be edited.
-    */
--  edit: function(target) {
-+  edit: async function(target) {
-     if (!target) {
+   this.edit = this.edit.bind(this);
+   this.cancelEdit = this.cancelEdit.bind(this);
+@@ -1803,6 +1808,13 @@ EditableFieldsEngine.prototype = {
        return;
      }
  
 +    // Some values are not parsable by the client or server so should not be editable
-+    if (this.storageFront && "isEditable" in this.storageFront) {
-+      const name = target.getAttribute("data-id");
-+      if (!(await this.storageFront.isEditable(this.host, name))) {
-+        return;
-+      }
++    const name = target.getAttribute("data-id");
++    const item = this.items.get(name);
++    if ("editable" in item && !item.editable) {
++      return;
 +    }
 +
      target.scrollIntoView(false);
      target.focus();
  
+diff --git a/devtools/client/storage/test/browser.ini b/devtools/client/storage/test/browser.ini
+--- a/devtools/client/storage/test/browser.ini
++++ b/devtools/client/storage/test/browser.ini
+@@ -75,3 +75,4 @@ tags = usercontextid
+ [browser_storage_sidebar_toggle.js]
+ [browser_storage_sidebar_update.js]
+ [browser_storage_values.js]
++[browser_storage_webext_storage_local.js]
+diff --git a/devtools/client/storage/test/browser_storage_webext_storage_local.js b/devtools/client/storage/test/browser_storage_webext_storage_local.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/storage/test/browser_storage_webext_storage_local.js
+@@ -0,0 +1,151 @@
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++http://creativecommons.org/publicdomain/zero/1.0/ */
++
++/* globals browser BigInt */
++
++"use strict";
++
++const {Toolbox} = require("devtools/client/framework/toolbox");
++
++/**
++* Set up and optionally open the `about:debugging` toolbox for a given extension.
++* @param {String} extensionId - The id for the extension to be targeted by the toolbox.
++* @param {Object} options - Configuration options with various optional fields:
++*   - {Boolean} openToolbox - If true, open the toolbox
++* @return {Promise} Resolves with a web extension actor target object and the toolbox
++* and storage objects when the toolbox has been setup
++*/
++async function setupExtensionDebuggingToolbox(id, options = {}) {
++  const {openToolbox = false} = options;
++
++  const target = await TargetFactory.forAddon({id});
++
++  let toolbox;
++  let storage;
++  if (openToolbox) {
++    const res = await openStoragePanel(null, target, Toolbox.HostType.WINDOW);
++    // Unlike the other storage actors, "extensionStorage" calls
++    // `this.storageActor.update` in its `populateStoresForHost` method, so that it is
++    // listed even when there is no extension page currently open.
++    info("Waiting for extensionStorage to 'update' after opening toolbox");
++    await gUI.once("store-objects-edit");
++    [toolbox, storage] = [res.toolbox, res.storage];
++  }
++
++  return {target, toolbox, storage};
++}
++
++// Pref remains in effect until test completes and is automatically cleared afterwards
++add_task(async function set_enable_extensionStorage_pref() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["devtools.storage.extensionStorage.enabled", true]],
++  });
++});
++
++/**
++* Since storage item values are represented in the client as strings in textboxes, not all
++* JavaScript object types supported by the WE storage local API and its IndexedDB backend
++* can be successfully stringified for display in the table much less parsed correctly when
++* the user tries to edit a value in the panel. This test is expected to change over time
++* as more and more value types are supported.
++*/
++add_task(async function test_extension_toolbox_only_supported_values_editable() {
++  async function background() {
++    browser.test.onMessage.addListener(async (msg, ...args) => {
++      switch (msg) {
++        case "storage-local-set":
++          await browser.storage.local.set(args[0]);
++          break;
++        case "storage-local-get":
++          const items = await browser.storage.local.get(args[0]);
++          for (const [key, val] of Object.entries(items)) {
++            browser.test.assertTrue(
++              val === args[1],
++              `New value ${val} is set for key ${key}.`,
++            );
++          }
++
++          break;
++        default:
++          browser.test.fail(`Unexpected test message: ${msg}`);
++      }
++
++      browser.test.sendMessage(`${msg}:done`);
++    });
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++  const extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      permissions: ["storage"],
++    },
++    background,
++    useAddonManager: "temporary",
++  });
++
++  await extension.startup();
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  const itemsSupported = {
++    arr: [1, 2],
++    bool: true,
++    null: null,
++    num: 4,
++    obj: {a: 123},
++    str: "hi",
++  };
++
++  const itemsUnsupported = {
++    arrBuffer: new ArrayBuffer(8),
++    bigint: BigInt(1),
++    date: new Date(0),
++    map: (new Map()).set("a", "b"),
++    regexp: /regexp/,
++    "set": (new Set()).add(1).add("a"),
++    undef: undefined,
++  };
++
++  extension.sendMessage("storage-local-set", {...itemsSupported, ...itemsUnsupported});
++  await extension.awaitMessage("storage-local-set:done");
++
++  const {target} = await setupExtensionDebuggingToolbox(
++    extension.id,
++    {openToolbox: true},
++  );
++
++  await selectTreeItem(["extensionStorage", host]);
++
++  info("Verify that value types supported by the storage actor are editable");
++  let validate = true;
++  const newValue = "anotherValue";
++  const supportedIds = Object.keys(itemsSupported);
++  for (const id of supportedIds) {
++    await editCell(id, "value", newValue, validate);
++  }
++
++  info("Verify that associated values have been changed in the extension");
++  extension.sendMessage("storage-local-get", Object.keys(itemsSupported), newValue);
++  await extension.awaitMessage("storage-local-get:done");
++
++  info("Verify that value types not supported by the storage actor are uneditable");
++  const expectedValStrings = {
++    arrBuffer: "{}",
++    bigint: String(BigInt(1)),
++    date: '"1970-01-01T00:00:00.000Z"',
++    map: "{}",
++    regexp: "{}",
++    "set": "{}",
++    undef: String(undefined),
++  };
++  validate = false;
++  for (const id of Object.keys(itemsUnsupported)) {
++    await startCellEdit(id, "value", false);
++    checkCellUneditable(id, "value");
++    checkCell(id, "value", expectedValStrings[id]);
++  }
++
++  await gDevTools.closeToolbox(target);
++  await extension.unload();
++  await target.destroy();
++});
+diff --git a/devtools/client/storage/test/head.js b/devtools/client/storage/test/head.js
+--- a/devtools/client/storage/test/head.js
++++ b/devtools/client/storage/test/head.js
+@@ -130,12 +130,16 @@ async function openTabAndSetupStorage(ur
+  *
+  * @param cb {Function} Optional callback, if you don't want to use the returned
+  *                      promise
++ * @param target {Object} Optional, the target for the toolbox; defaults to a tab target
++ * @param hostType {Toolbox.HostType} Optional, type of host that will host the toolbox
+  *
+  * @return {Promise} a promise that resolves when the storage inspector is ready
+  */
+-var openStoragePanel = async function(cb) {
++var openStoragePanel = async function(cb, target, hostType) {
+   info("Opening the storage inspector");
+-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
++  if (!target) {
++    target = await TargetFactory.forTab(gBrowser.selectedTab);
++  }
+ 
+   let storage, toolbox;
+ 
+@@ -162,7 +166,7 @@ var openStoragePanel = async function(cb
+   }
+ 
+   info("Opening the toolbox");
+-  toolbox = await gDevTools.showToolbox(target, "storage");
++  toolbox = await gDevTools.showToolbox(target, "storage", hostType);
+   storage = toolbox.getPanel("storage");
+   gPanelWindow = storage.panelWindow;
+   gUI = storage.UI;
+@@ -768,6 +772,26 @@ function checkCell(id, column, expected)
+ }
+ 
+ /**
++ * Check that a cell is not in edit mode.
++ *
++ * @param {String} id
++ *        The uniqueId of the row.
++ * @param {String} column
++ *        The id of the column
++ */
++function checkCellUneditable(id, column) {
++  const row = getRowCells(id, true);
++  const cell = row[column];
++
++  const editableFieldsEngine = gUI.table._editableFieldsEngine;
++  const textbox = editableFieldsEngine.textbox;
++
++  // When a field is being edited, the cell is hidden, and the textbox is made visible.
++  ok(!cell.hidden && textbox.hidden,
++     `The cell located in column ${column} and row ${id} is not editable.`);
++}
++
++/**
+  * Show or hide a column.
+  *
+  * @param  {String} id
+@@ -837,10 +861,10 @@ async function typeWithTerminator(str, t
+   }
+ 
+   info("Typing " + str);
+-  EventUtils.sendString(str);
++  EventUtils.sendString(str, gPanelWindow);
+ 
+   info("Pressing " + terminator);
+-  EventUtils.synthesizeKey(terminator);
++  EventUtils.synthesizeKey(terminator, null, gPanelWindow);
+ 
+   if (validate) {
+     info("Validating results... waiting for ROW_EDIT event.");
 diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
 --- a/devtools/client/storage/ui.js
 +++ b/devtools/client/storage/ui.js
@@ -195,28 +504,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
  
  // Maximum length of item name to show in context menu label - will be
  // trimmed with ellipsis if it's longer.
-@@ -99,11 +96,15 @@ class StorageUI {
-     this.tree.on("select", this.onHostSelect);
- 
-     const tableNode = this._panelDoc.getElementById("storage-table");
--    this.table = new TableWidget(tableNode, {
--      emptyText: L10N.getStr("table.emptyText"),
--      highlightUpdated: true,
--      cellContextMenuId: "storage-table-popup",
--    });
-+    this.table = new TableWidget(
-+      tableNode,
-+      {
-+        emptyText: L10N.getStr("table.emptyText"),
-+        highlightUpdated: true,
-+        cellContextMenuId: "storage-table-popup",
-+      },
-+      this.front,
-+    );
- 
-     this.updateObjectSidebar = this.updateObjectSidebar.bind(this);
-     this.table.on(TableWidget.EVENTS.ROW_SELECTED, this.updateObjectSidebar);
-@@ -756,7 +757,10 @@ class StorageUI {
+@@ -756,7 +753,10 @@ class StorageUI {
        itemVar.setGrip(value);
  
        // May be the item value is a json or a key value pair itself
@@ -228,7 +516,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
  
        // By default the item name and value are shown. If this is the only
        // information available, then nothing else is to be displayed.
-@@ -789,7 +793,10 @@ class StorageUI {
+@@ -789,7 +789,10 @@ class StorageUI {
          }
  
          mainScope.addItem(key, {}, true).setGrip(item[key]);
@@ -240,7 +528,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
        }
      }
  
-@@ -825,47 +832,13 @@ class StorageUI {
+@@ -825,47 +828,13 @@ class StorageUI {
      return host;
    }
  
@@ -293,7 +581,7 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
      const jsonObject = Object.create(null);
      const view = this.view;
      jsonObject[name] = obj;
-@@ -879,97 +852,6 @@ class StorageUI {
+@@ -879,97 +848,6 @@ class StorageUI {
    }
  
    /**
@@ -391,15 +679,6 @@ diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
     * Select handler for the storage tree. Fetches details of the selected item
     * from the storage details and populates the storage tree.
     *
-@@ -990,6 +872,8 @@ class StorageUI {
-     this.table.host = host;
-     this.table.datatype = type;
- 
-+    await this.table.setStorageFront(type);
-+
-     this.updateToolbar();
- 
-     let names = null;
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
@@ -425,7 +704,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1309,530 @@ StorageActors.createActor({
+@@ -1300,6 +1309,529 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -828,15 +1107,16 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        return null;
 +      }
 +
-+      let {name, value} = item;
++      const {name, value} = item;
 +
 +      // TODO: For uneditable/unsupported value types, list value type as string
 +      // e.g. for maps, set value = "Map"; it will not be editable in the client.
++      let newValue = value;
 +      if (typeof value !== "string") {
 +        try {
-+          value = JSON.stringify(value) || String(value);
++          newValue = JSON.stringify(value) || String(value);
 +        } catch (error) {
-+          value = String(value);
++          newValue = String(value);
 +        }
 +      }
 +
@@ -845,14 +1125,15 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      // to trim the value. When the bug is fixed we should stop trimming the
 +      // string here.
 +      const maxLength = DebuggerServer.LONG_STRING_LENGTH - 1;
-+      if (value.length > maxLength) {
-+        value = value.substr(0, maxLength);
++      if (newValue.length > maxLength) {
++        newValue = newValue.substr(0, maxLength);
 +      }
 +
 +      return {
 +        name,
-+        value: new LongStringActor(this.conn, value || ""),
++        value: new LongStringActor(this.conn, newValue || ""),
 +        area: "local",
++        editable: this.isEditable(value),
 +      };
 +    },
 +
@@ -870,10 +1151,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    * Editing is supported only for serializable value types. Examples of unserializable
 +    * types include Map, Set and ArrayBuffer.
 +    */
-+    async isEditable(host, name) {
-+      const db = this.dbConnectionForHost.get(host);
-+      const item = await db.get([name]);
-+      const value = item[name];
++    isEditable(value) {
 +      const {supportedTypes} = extensionStorageHelpers;
 +      for (const isSupportedType of Object.values(supportedTypes)) {
 +        if (isSupportedType(value)) {
@@ -956,7 +1234,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3223,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3222,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -972,7 +1250,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3283,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3282,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
@@ -999,19 +1277,21 @@ diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.
 new file mode 100644
 --- /dev/null
 +++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,34 @@
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +http://creativecommons.org/publicdomain/zero/1.0/ */
 +
 +"use strict";
 +
-+add_task(async function test_extension_store_disabled_for_non_extension_target_process() {
-+  // Pref remains in effect until test completes and is automatically cleared afterwards
++// Pref remains in effect until test completes and is automatically cleared afterwards
++add_task(async function set_enable_extensionStorage_pref() {
 +  await SpecialPowers.pushPrefEnv({
 +    set: [["devtools.storage.extensionStorage.enabled", true]],
 +  });
++});
 +
++add_task(async function test_extension_store_disabled_for_non_extension_target_process() {
 +  info("Setting up and connecting Debugger Server and Client in main process");
 +  initDebuggerServer();
 +  const transport = DebuggerServer.connectPipe();
@@ -1299,12 +1579,12 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data, [
-+      {area: "local", name: "a", value: {str: "123"}},
-+      {area: "local", name: "b", value: {str: "[4,5]"}},
-+      {area: "local", name: "c", value: {str: "{\"d\":678}"}},
-+      {area: "local", name: "d", value: {str: "true"}},
-+      {area: "local", name: "e", value: {str: "hi"}},
-+      {area: "local", name: "f", value: {str: "null"}},
++      {area: "local", name: "a", value: {str: "123"}, editable: true},
++      {area: "local", name: "b", value: {str: "[4,5]"}, editable: true},
++      {area: "local", name: "c", value: {str: "{\"d\":678}"}, editable: true},
++      {area: "local", name: "d", value: {str: "true"}, editable: true},
++      {area: "local", name: "e", value: {str: "hi"}, editable: true},
++      {area: "local", name: "f", value: {str: "null"}, editable: true},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1341,7 +1621,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1381,7 +1661,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1424,7 +1704,7 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1434,7 +1714,7 @@ new file mode 100644
 +  data = (await extensionStorage.getStoreObjects(host)).data;
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "The results are unchanged when an extension page adds duplicate items"
 +  );
 +
@@ -1503,7 +1783,7 @@ new file mode 100644
 +      // LongStringActor for the view (by way of `toStoreObject`, the
 +      // value's data type in the database is unchanged, as demonstrated
 +      // by the next assertion in the test extension.
-+      [{area: "local", name: key, value: {str: parsedVal || newVal}}],
++      [{area: "local", name: key, value: {str: parsedVal || newVal}, editable: true}],
 +      "Got the expected results on populated storage.local"
 +    );
 +
@@ -1580,7 +1860,7 @@ new file mode 100644
 +  let {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1592,8 +1872,8 @@ new file mode 100644
 +  Assert.deepEqual(
 +    data,
 +    [
-+      {area: "local", name: "a", value: {str: "123"}},
-+      {area: "local", name: "b", value: {str: "456"}},
++      {area: "local", name: "a", value: {str: "123"}, editable: true},
++      {area: "local", name: "b", value: {str: "456"}, editable: true},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1667,7 +1947,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1735,7 +2015,7 @@ new file mode 100644
 +  const {data} = await extensionStorage.getStoreObjects(host);
 +  Assert.deepEqual(
 +    data,
-+    [{area: "local", name: "a", value: {str: "123"}}],
++    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
 +    "Got the expected results on populated storage.local"
 +  );
 +
@@ -1801,8 +2081,8 @@ new file mode 100644
 +  Assert.deepEqual(
 +    data,
 +    [
-+      {area: "local", name: "a", value: {str: "{\"b\":123}"}},
-+      {area: "local", name: "c", value: {str: "{\"d\":456}"}},
++      {area: "local", name: "a", value: {str: "{\"b\":123}"}, editable: true},
++      {area: "local", name: "c", value: {str: "{\"d\":456}"}, editable: true},
 +    ],
 +    "Got the expected results on populated storage.local"
 +  );
@@ -1856,7 +2136,7 @@ diff --git a/devtools/shared/moz.build b/devtools/shared/moz.build
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
-@@ -163,6 +163,34 @@ createStorageSpec({
+@@ -163,6 +163,25 @@ createStorageSpec({
    methods: storageMethods,
  });
  
@@ -1876,15 +2156,6 @@ diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 +  storeObjectType: "extensionstoreobject",
 +  methods: {
 +    ...storageMethods,
-+    isEditable: {
-+      request: {
-+        host: Arg(0, "string"),
-+        name: Arg(1, "string"),
-+      },
-+      response: {
-+        value: RetVal("boolean"),
-+      },
-+    },
 +  },
 +});
 +
