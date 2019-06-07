@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 8df17140b018565e293b3b6d6d3edd65a7a71618
+# Node ID 93155495c65293ee9a85944453c4e70b4ea11a7f
 # Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -385,13 +385,13 @@ new file mode 100644
 +
 +  info("Verify that value types not supported by the storage actor are uneditable");
 +  const expectedValStrings = {
-+    arrBuffer: "{}",
-+    bigint: String(BigInt(1)),
-+    date: '"1970-01-01T00:00:00.000Z"',
-+    map: "{}",
-+    regexp: "{}",
-+    "set": "{}",
-+    undef: String(undefined),
++    arrBuffer: "[object ArrayBuffer]",
++    bigint: "[value bigint]",
++    date: "[object Date]",
++    map: "[object Map]",
++    regexp: "[object RegExp]",
++    "set": "[object Set]",
++    undef: "[value undefined]",
 +  };
 +  validate = false;
 +  for (const id of Object.keys(itemsUnsupported)) {
@@ -704,7 +704,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1309,529 @@ StorageActors.createActor({
+@@ -1300,6 +1309,594 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -727,39 +727,94 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    },
 +  },
 +  supportedTypes: { // Helper methods to determine the value type of an item in isEditable
-+    isArray: function(value) {
-+      return Array.isArray(value);
++    array: {
++      test(value) {
++        return Array.isArray(value);
++      },
 +    },
-+    isBoolean: function(value) {
-+      return typeof value === "boolean";
++    boolean: {
++      test(value) {
++        return typeof value === "boolean";
++      },
 +    },
-+    isNull: function(value) {
-+      return value === null;
++    null: {
++      test(value) {
++        return value === null;
++      },
 +    },
-+    isNumber: function(value) {
-+      return typeof value === "number";
++    number: {
++      test(value) {
++        return typeof value === "number";
++      },
 +    },
-+    isObject: function(value) {
-+      return lodash.isPlainObject(value);
++    object: {
++      test(value) {
++        return lodash.isPlainObject(value);
++      },
 +    },
-+    isString: function(value) {
-+      return typeof value === "string";
++    string: {
++      test(value) {
++        return typeof value === "string";
++      },
 +    },
 +  },
 +  unsupportedTypes: { // Used to display a string in the client in toStoreObject
-+    // TODO: Add ArrayBuffer, Map, Set, ...?
-+    isBigint: function(value) {
-+      // eslint-disable-next-line
-+      return typeof value === "bigint";
++    arrayBuffer: {
++      test(value) {
++        return lodash.isArrayBuffer(value);
++      },
++      stringify(value) {
++        return "[object ArrayBuffer]";
++      },
 +    },
-+    isDate: function(value) {
-+      return lodash.isDate(value);
++    bigint: {
++      test(value) {
++        // eslint-disable-next-line
++        return typeof value === "bigint";
++      },
++      stringify(value) {
++        return "[value bigint]";
++      },
 +    },
-+    isRegexp: function(value) {
-+      return lodash.isRegExp(value);
++    date: {
++      test(value) {
++        return lodash.isDate(value);
++      },
++      stringify(value) {
++        return "[object Date]";
++      },
 +    },
-+    isUndefined: function(value) {
-+      return typeof value === "undefined";
++    map: {
++      test(value) {
++        return lodash.isMap(value);
++      },
++      stringify(value) {
++        return "[object Map]";
++      },
++    },
++    "set": {
++      test(value) {
++        return lodash.isSet(value);
++      },
++      stringify(value) {
++        return "[object Set]";
++      },
++    },
++    regexp: {
++      test(value) {
++        return lodash.isRegExp(value);
++      },
++      stringify(value) {
++        return "[object RegExp]";
++      },
++    },
++    undefined: {
++      test(value) {
++        return typeof value === "undefined";
++      },
++      stringify(value) {
++        return "[value undefined]";
++      },
 +    },
 +  },
 +
@@ -824,6 +879,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        throw new Error("ERR_DIRECTOR_PARENT_UNKNOWN_METHOD");
 +    }
 +  },
++
 +  // Runs in the child process. This determines what code to execute based on the message
 +  // received from the parent process.
 +  handleParentRequest(msg) {
@@ -842,6 +898,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        throw new Error("ERR_DIRECTOR_PARENT_UNKNOWN_METHOD");
 +    }
 +  },
++
 +  callParentProcessAsync(methodName, ...args) {
 +    const deferred = defer();
 +
@@ -1109,14 +1166,22 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +
 +      const {name, value} = item;
 +
-+      // TODO: For uneditable/unsupported value types, list value type as string
-+      // e.g. for maps, set value = "Map"; it will not be editable in the client.
-+      let newValue = value;
-+      if (typeof value !== "string") {
-+        try {
-+          newValue = JSON.stringify(value) || String(value);
-+        } catch (error) {
-+          newValue = String(value);
++      let newValue;
++      const editable = this.isEditable(value);
++      if (typeof value === "string") {
++        newValue = value;
++      } else if (editable) {
++        newValue = JSON.stringify(value);
++      } else {
++        // We don't cover every possible unsupported JS object explicitly, so assign
++        // this as a failsafe.
++        newValue = "[value uneditable]";
++        const {unsupportedTypes} = extensionStorageHelpers;
++        for (const {test, stringify} of Object.values(unsupportedTypes)) {
++          if (test(value)) {
++            newValue = stringify(value);
++            break;
++          }
 +        }
 +      }
 +
@@ -1133,7 +1198,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        name,
 +        value: new LongStringActor(this.conn, newValue || ""),
 +        area: "local",
-+        editable: this.isEditable(value),
++        editable,
 +      };
 +    },
 +
@@ -1153,8 +1218,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    */
 +    isEditable(value) {
 +      const {supportedTypes} = extensionStorageHelpers;
-+      for (const isSupportedType of Object.values(supportedTypes)) {
-+        if (isSupportedType(value)) {
++      for (const {test} of Object.values(supportedTypes)) {
++        if (test(value)) {
 +          return true;
 +        }
 +      }
@@ -1234,7 +1299,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3222,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3287,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -1250,7 +1315,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3282,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3347,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
