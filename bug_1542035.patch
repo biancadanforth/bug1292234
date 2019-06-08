@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 93155495c65293ee9a85944453c4e70b4ea11a7f
+# Node ID ed5eeaffd12475710aea5669900739af018f579a
 # Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -226,14 +226,16 @@ diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/sha
  
    this.edit = this.edit.bind(this);
    this.cancelEdit = this.cancelEdit.bind(this);
-@@ -1803,6 +1808,13 @@ EditableFieldsEngine.prototype = {
+@@ -1803,6 +1808,15 @@ EditableFieldsEngine.prototype = {
        return;
      }
  
-+    // Some values are not parsable by the client or server so should not be editable
++    // Some item values are not parsable by the client or server so should not be
++    // editable. Cells corresponding to item names could still be edited though.
 +    const name = target.getAttribute("data-id");
++    const value = target.getAttribute("value");
 +    const item = this.items.get(name);
-+    if ("editable" in item && !item.editable) {
++    if (name !== value && "editable" in item && !item.editable) {
 +      return;
 +    }
 +
