@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID e32ffe05e84c5ca8d0a5eed0021721ddce443b14
+# Node ID 4c022c49b16afa20aa46dbb4afa800cd27b1cf02
 # Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -1208,8 +1208,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      return {
 +        name,
 +        value: new LongStringActor(this.conn, newValue || ""),
-+        area: "local",
-+        editable, // Bug 1542038, 1542039: set the correct storage area
++        area: "local", // Bug 1542038, 1542039: set the correct storage area
++        editable,
 +      };
 +    },
 +
