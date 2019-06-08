@@ -2,7 +2,7 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1556821965 25200
 #      Thu May 02 11:32:45 2019 -0700
-# Node ID 93155495c65293ee9a85944453c4e70b4ea11a7f
+# Node ID e32ffe05e84c5ca8d0a5eed0021721ddce443b14
 # Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
 Bug 1542035 - Prototype extension local storage in addon developer toolbox
 
@@ -226,14 +226,16 @@ diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/sha
  
    this.edit = this.edit.bind(this);
    this.cancelEdit = this.cancelEdit.bind(this);
-@@ -1803,6 +1808,13 @@ EditableFieldsEngine.prototype = {
+@@ -1803,6 +1808,15 @@ EditableFieldsEngine.prototype = {
        return;
      }
  
-+    // Some values are not parsable by the client or server so should not be editable
++    // Some item values are not parsable by the client or server so should not be
++    // editable. Cells corresponding to item names could still be edited though.
 +    const name = target.getAttribute("data-id");
++    const value = target.getAttribute("value");
 +    const item = this.items.get(name);
-+    if ("editable" in item && !item.editable) {
++    if (name !== value && "editable" in item && !item.editable) {
 +      return;
 +    }
 +
@@ -704,7 +706,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1309,594 @@ StorageActors.createActor({
+@@ -1300,6 +1309,607 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -833,6 +835,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  },
 +
 +  // The main process does not require an extension context to select the backend
++  // Bug 1542038, 1542039: Each storage area will need its own implementation, as
++  // they use different storage backends.
 +  async selectBackendInParent(addonId) {
 +    const {extension} = WebExtensionPolicy.getByID(addonId);
 +    const parentResult = await ExtensionStorageIDB.selectBackend({extension});
@@ -962,6 +966,10 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      this.addonId = this.storageActor.parentActor.addonId;
 +
 +      // Map<host, ExtensionStorageIDB db connection>
++      // Bug 1542038, 1542039: Each storage area will need its own
++      // dbConnectionForHost, as they each have different storage backends.
++      // Anywhere dbConnectionForHost is used, we need to know the storage
++      // area to access the correct database.
 +      this.dbConnectionForHost = new Map();
 +
 +      this.setupChildProcess();
@@ -1069,6 +1077,10 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        return;
 +      }
 +
++      // Bug 1542038, 1542039: Each storage area will need its own this.hostVsStores
++      // or this actor will need to deviate from how this.hostVsStores is defined in the
++      // framework to associate each storage item with a storage area. Any methods
++      // that use it will also need to be updated (e.g. getNamesForHost).
 +      this.hostVsStores = new Map();
 +      const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
 +      await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
@@ -1082,9 +1094,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    populateStoresForHosts() {},
 +
 +    /**
-+    * This method asynchronously reads the browser.storage.local data for the target
-+    * extension if it has the storage permission and caches this data into
-+    * this.hostVsStores.
++    * This method asynchronously reads the storage data for the target extension
++    * and caches this data into this.hostVsStores.
 +    * @param {String} host - the hostname for the extension
 +    */
 +    async populateStoresForHost(host) {
@@ -1198,7 +1209,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        name,
 +        value: new LongStringActor(this.conn, newValue || ""),
 +        area: "local",
-+        editable,
++        editable, // Bug 1542038, 1542039: set the correct storage area
 +      };
 +    },
 +
@@ -1217,6 +1228,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    * types include Map, Set and ArrayBuffer.
 +    */
 +    isEditable(value) {
++      // Bug 1542038: the managed storage area is never editable
 +      const {supportedTypes} = extensionStorageHelpers;
 +      for (const {test} of Object.values(supportedTypes)) {
 +        if (test(value)) {
@@ -1227,6 +1239,8 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    },
 +
 +    async addItem(guid, host) {
++      // Bug 1542038, 1542039: The user should be able to choose which storage area to
++      // add an item to (managed excepted).
 +      const db = this.dbConnectionForHost.get(host);
 +      if (!db) {
 +        return;
@@ -1289,6 +1303,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    * the storage inspector.
 +    */
 +    fireOnChangedExtensionEvent(host, changes) {
++      // Bug 1542038, 1542039: Which message to send depends on the storage area
 +      const uuid = (new URL(host)).host;
 +      Services.cpmm.sendAsyncMessage(`Extension:StorageLocalOnChanged:${uuid}`,
 +                                     changes);
@@ -1299,7 +1314,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3287,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3300,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -1315,7 +1330,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3347,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3360,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
