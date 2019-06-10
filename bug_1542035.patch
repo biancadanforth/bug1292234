@@ -2,9 +2,16 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1560109542 25200
 #      Sun Jun 09 12:45:42 2019 -0700
-# Node ID 5b83a7a4e539d033f6301103ab8f06be64057a15
+# Node ID a437506d7c09b81bfed87464fe2f9fd86a7f7fbb
 # Parent  72bbfe532d6472e6fafaedd9446aa217cbef8b4d
 Bug 1542035 - Add read-only support for extension storage.local in addon debugger
+
+* Add a new extensionStorage actor to enable inspection of data stored by an extension using the WebExtension storage.local API in the Storage panel client.
+* The actor is only listed when the developer toolbox is targeting an extension process. For multi-process Firefox (e10s), this applies to only the toolbox accessed in about:debugging.
+* The actor is gated behind a preference: devtools.storage.extensionStorage.enabled. This preference is set to false by default.
+* The Storage panel displays storage item values as strings. If a storage item value is not JSON-stringifiable, it will be displayed in the table as "Object".
+* It should be noted that extension storage.local’s storage backend is in the process of migrating from a JSON file to IndexedDB as of Firefox 66 for performance reasons. This actor only works for extensions that have migrated to the IndexedDB storage backend.
+* In-line comments referencing Bugs 1542038 and 1542039 indicate places where the implementation may differ for local storage versus the other storage areas in the actor.
 
 diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
 --- a/browser/app/profile/firefox.js
@@ -1339,9 +1346,17 @@ diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/compo
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1560110743 25200
 #      Sun Jun 09 13:05:43 2019 -0700
-# Node ID 7322a4d785d0251b8404c2100b4e8713516dd7c2
-# Parent  5b83a7a4e539d033f6301103ab8f06be64057a15
+# Node ID 4010df7e39f5e0310959022cb202a9f8dae30bf1
+# Parent  a437506d7c09b81bfed87464fe2f9fd86a7f7fbb
 Bug 1542035 - Add limited write support for extension storage.local in addon debugger
+
+* Update the extensionStorage actor to enable some writing to extension storage.local through the Storage panel client.
+* All values in the client are displayed as strings, so the actor must stringify them before sending them to the client and parse them when receiving changes from the client. For this reason, there is currently limited write support.
+  * Storage item values that are JSONifiable (numbers, strings, booleans, object literals, arrays and null) can be modified in the Storage panel.
+  * Non-JSONifiable values cannot be modified, and will be represented by "[value *]" or "[object *]" in the panel, where * depends on the value type.
+  * Storage item names can be modified in the storage panel.
+* In-line comments referencing Bugs 1542038 and 1542039 indicate places where the implementation may differ for local storage versus the other storage areas in the actor.
+* The parseItemValue method used in the client was moved to a shared directory, so that the actor could parse string values from the client in its editItem method.
 
 diff --git a/devtools/client/framework/target.js b/devtools/client/framework/target.js
 --- a/devtools/client/framework/target.js
