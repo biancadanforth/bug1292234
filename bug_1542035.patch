@@ -1346,7 +1346,7 @@ diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/compo
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1560110743 25200
 #      Sun Jun 09 13:05:43 2019 -0700
-# Node ID 4010df7e39f5e0310959022cb202a9f8dae30bf1
+# Node ID b5c105360020720d4bcea5227cda7481e4efdf80
 # Parent  a437506d7c09b81bfed87464fe2f9fd86a7f7fbb
 Bug 1542035 - Add limited write support for extension storage.local in addon debugger
 
@@ -2284,7 +2284,34 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
 --- a/devtools/server/tests/unit/test_extension_storage_actor.js
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -268,12 +268,12 @@ add_task(async function test_panel_live_
+@@ -133,22 +133,20 @@ function getExtensionConfig(options = {}
+ */
+ async function extensionScriptWithMessageListener() {
+   browser.test.onMessage.addListener(async (msg, ...args) => {
++    let value = null;
+     switch (msg) {
+       case "storage-local-set":
+         await browser.storage.local.set(args[0]);
+         break;
+       case "storage-local-get":
+-        const {key, valueType} = args[0];
+-        const value = (await browser.storage.local.get(key))[key];
+-        browser.test.assertTrue(typeof value === valueType,
+-          `Value fetched by extension matches expected value type, ${valueType}`
+-        );
++        const key = args[0];
++        value = (await browser.storage.local.get(key))[key];
+         break;
+       default:
+         browser.test.fail(`Unexpected test message: ${msg}`);
+     }
+ 
+-    browser.test.sendMessage(`${msg}:done`);
++    browser.test.sendMessage(`${msg}:done`, value);
+   });
+   browser.test.sendMessage("extension-origin", window.location.origin);
+ }
+@@ -268,12 +266,12 @@ add_task(async function test_panel_live_
    data = (await extensionStorage.getStoreObjects(host)).data;
    Assert.deepEqual(
      data, [
@@ -2303,7 +2330,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      ],
      "Got the expected results on populated storage.local"
    );
-@@ -304,7 +304,7 @@ add_task(async function test_panel_data_
+@@ -304,7 +302,7 @@ add_task(async function test_panel_data_
    const {data} = await extensionStorage.getStoreObjects(host);
    Assert.deepEqual(
      data,
@@ -2312,7 +2339,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -338,7 +338,7 @@ add_task(async function test_panel_data_
+@@ -338,7 +336,7 @@ add_task(async function test_panel_data_
    const {data} = await extensionStorage.getStoreObjects(host);
    Assert.deepEqual(
      data,
@@ -2321,7 +2348,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -376,7 +376,7 @@ add_task(async function test_panel_data_
+@@ -376,7 +374,7 @@ add_task(async function test_panel_data_
    data = (await extensionStorage.getStoreObjects(host)).data;
    Assert.deepEqual(
      data,
@@ -2330,7 +2357,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -386,7 +386,7 @@ add_task(async function test_panel_data_
+@@ -386,7 +384,7 @@ add_task(async function test_panel_data_
    data = (await extensionStorage.getStoreObjects(host)).data;
    Assert.deepEqual(
      data,
@@ -2339,7 +2366,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "The results are unchanged when an extension page adds duplicate items"
    );
  
-@@ -395,6 +395,77 @@ add_task(async function test_panel_data_
+@@ -395,6 +393,83 @@ add_task(async function test_panel_data_
  });
  
  /**
@@ -2350,8 +2377,9 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 +* - Edit the value of the item in the storage panel
 +* - Assert:
 +*   - The data in the storage panel should match the item added by the extension.
-+*   - The storage actor is not mutating the item value's data type
-+*     when the item's value is edited in the storage panel
++*   - The storage actor is correctly parsing and setting the string representation of
++*     the value in the storage local database when the item's value is edited in the
++*     storage panel
 +*/
 +add_task(async function test_editing_items_in_panel_parses_supported_values_correctly() {
 +  const extension = await startupExtension(
@@ -2367,19 +2395,19 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 +  const oldValue = oldItem[key];
 +  // A tuple representing information for a new value entered into the panel for oldItem:
 +  // [
-+  //   typeof value,
++  //   value,
 +  //   editItem string representation of value,
 +  //   toStoreObject string representation of value,
 +  // ]
 +  const valueInfo = [
-+    ["boolean", "true", "true"],
-+    ["string", "hi", "hi"],
-+    ["number", "456", "456"],
-+    ["object", "{b: 789}", "{\"b\":789}"],
-+    ["object", "[1, 2, 3]", "[1,2,3]"],
-+    ["object", "null", "null"],
++    [true, "true", "true"],
++    ["hi", "hi", "hi"],
++    [456, "456", "456"],
++    [{b: 789}, "{b: 789}", "{\"b\":789}"],
++    [[1, 2, 3], "[1, 2, 3]", "[1,2,3]"],
++    [null, "null", "null"],
 +  ];
-+  for (const [valueType, editItemValueStr, toStoreObjectValueStr] of valueInfo) {
++  for (const [value, editItemValueStr, toStoreObjectValueStr] of valueInfo) {
 +    info("Setting a storage item through the extension");
 +    extension.sendMessage("storage-local-set", oldItem);
 +    await extension.awaitMessage("storage-local-set:done");
@@ -2403,11 +2431,16 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
 +    );
 +
 +    // The view layer is separate from the database layer; therefore while values are
-+    // stringified (via toStoreObject) for display in the client, the value's data type in
-+    // the database is unchanged.
++    // stringified (via toStoreObject) for display in the client, the value (and its type)
++    // in the database is unchanged.
 +    info("Verifying the expected new value matches the value fetched in the extension");
-+    extension.sendMessage("storage-local-get", {key, valueType});
-+    await extension.awaitMessage("storage-local-get:done");
++    extension.sendMessage("storage-local-get", key);
++    const extValue = await extension.awaitMessage("storage-local-get:done");
++    Assert.deepEqual(
++      value,
++      extValue,
++      `The string value ${editItemValueStr} was correctly parsed to ${value}`
++    );
 +  }
 +
 +  await shutdown(extension, target);
@@ -2417,7 +2450,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
  * Test case: Storage panel shows extension storage data added prior to extension startup
  * - Load extension that adds a storage item
  * - Uninstall the extension
-@@ -441,7 +512,7 @@ add_task(async function test_panel_data_
+@@ -441,7 +516,7 @@ add_task(async function test_panel_data_
    let {data} = await extensionStorage.getStoreObjects(host);
    Assert.deepEqual(
      data,
@@ -2426,7 +2459,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -453,8 +524,8 @@ add_task(async function test_panel_data_
+@@ -453,8 +528,8 @@ add_task(async function test_panel_data_
    Assert.deepEqual(
      data,
      [
@@ -2437,7 +2470,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      ],
      "Got the expected results on populated storage.local"
    );
-@@ -523,7 +594,7 @@ add_task(async function test_panel_live_
+@@ -523,7 +598,7 @@ add_task(async function test_panel_live_
    const {data} = await extensionStorage.getStoreObjects(host);
    Assert.deepEqual(
      data,
@@ -2446,7 +2479,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -587,7 +658,7 @@ add_task(async function test_panel_live_
+@@ -587,7 +662,7 @@ add_task(async function test_panel_live_
    const {data} = await extensionStorage.getStoreObjects(host);
    Assert.deepEqual(
      data,
@@ -2455,7 +2488,7 @@ diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtoo
      "Got the expected results on populated storage.local"
    );
  
-@@ -645,8 +716,8 @@ add_task(async function test_panel_live_
+@@ -645,8 +720,8 @@ add_task(async function test_panel_live_
    Assert.deepEqual(
      data,
      [
