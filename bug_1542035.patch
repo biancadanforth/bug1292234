@@ -1,15 +1,24 @@
 # HG changeset patch
 # User Bianca Danforth <bdanforth@mozilla.com>
-# Date 1556821965 25200
-#      Thu May 02 11:32:45 2019 -0700
-# Node ID 4c022c49b16afa20aa46dbb4afa800cd27b1cf02
-# Parent  dfc513e7e1413158d8d0d6ccf029c4a0b6a0a2ca
-Bug 1542035 - Prototype extension local storage in addon developer toolbox
+# Date 1560109542 25200
+#      Sun Jun 09 12:45:42 2019 -0700
+# Node ID 0cffb9f87871de329c9158ada01f5210b732a19b
+# Parent  7a44faddc33d2e5d7435fbff216cc022d0fb5e6e
+Bug 1542035 - Add read-only support for extension storage.local in addon debugger
+
+* Add a new extensionStorage actor to enable inspection of data stored by an extension using the WebExtension storage.local API in the Storage panel client.
+* The actor is only listed when the developer toolbox is targeting an extension process. For multi-process Firefox (e10s), this applies to only the toolbox accessed in about:debugging.
+* The actor is gated behind a preference: devtools.storage.extensionStorage.enabled. This preference is set to false by default.
+* The Storage panel displays storage item values as strings. If a storage item value is not JSON-stringifiable, it will be displayed in the table as "Object".
+* It should be noted that extension storage.local’s storage backend is in the process of migrating from a JSON file to IndexedDB as of Firefox 66 for performance reasons. This actor only works for extensions that have migrated to the IndexedDB storage backend.
+* In-line comments referencing Bugs 1542038 and 1542039 indicate places where the implementation may differ for local storage versus the other storage areas in the actor.
+
+Differential Revision: https://phabricator.services.mozilla.com/D34415
 
 diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
 --- a/browser/app/profile/firefox.js
 +++ b/browser/app/profile/firefox.js
-@@ -79,6 +79,9 @@ pref("extensions.langpacks.signatures.re
+@@ -84,6 +84,9 @@ pref("extensions.langpacks.signatures.re
  pref("xpinstall.signatures.required", true);
  pref("xpinstall.signatures.devInfoURL", "https://wiki.mozilla.org/Addons/Extension_Signing");
  
@@ -19,137 +28,6 @@ diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
  // Dictionary download preference
  pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/language-tools/");
  
-diff --git a/devtools/client/framework/target.js b/devtools/client/framework/target.js
---- a/devtools/client/framework/target.js
-+++ b/devtools/client/framework/target.js
-@@ -14,6 +14,31 @@ const targets = new WeakMap();
-  * Functions for creating Targets
-  */
- exports.TargetFactory = {
-+  /**
-+  * Spawn a DebuggerServer in the parent process
-+  */
-+  _createLocalServer() {
-+    // Since a remote protocol connection will be made, let's start the
-+    // DebuggerServer here, once and for all tools.
-+    DebuggerServer.init();
-+
-+    // When connecting to a local tab, we only need the root actor.
-+    // Then we are going to call DebuggerServer.connectToFrame and talk
-+    // directly with actors living in the child process.
-+    // We also need browser actors for actor registry which enabled addons
-+    // to register custom actors.
-+    // TODO: the comment and implementation are out of sync here. See Bug 1420134.
-+    DebuggerServer.registerAllActors();
-+    // Enable being able to get child process actors
-+    DebuggerServer.allowChromeProcess = true;
-+  },
-+
-+  /**
-+  * Create aDebuggerClient and connect it to this local DebuggerServer
-+  */
-+  _createLocalClient() {
-+    return new DebuggerClient(DebuggerServer.connectPipe());
-+  },
- 
-   /**
-    * Construct a Target. The target will be cached for each Tab so that we create only
-@@ -46,8 +71,6 @@ exports.TargetFactory = {
-    * Instantiate a target for the given tab.
-    *
-    * This will automatically:
--   * - spawn a DebuggerServer in the parent process,
--   * - create a DebuggerClient and connect it to this local DebuggerServer,
-    * - call RootActor's `getTab` request to retrieve the FrameTargetActor's form,
-    * - instantiate a Target instance.
-    *
-@@ -57,28 +80,8 @@ exports.TargetFactory = {
-    * @return A target object
-    */
-   async createTargetForTab(tab) {
--    function createLocalServer() {
--      // Since a remote protocol connection will be made, let's start the
--      // DebuggerServer here, once and for all tools.
--      DebuggerServer.init();
--
--      // When connecting to a local tab, we only need the root actor.
--      // Then we are going to call DebuggerServer.connectToFrame and talk
--      // directly with actors living in the child process.
--      // We also need browser actors for actor registry which enabled addons
--      // to register custom actors.
--      // TODO: the comment and implementation are out of sync here. See Bug 1420134.
--      DebuggerServer.registerAllActors();
--      // Enable being able to get child process actors
--      DebuggerServer.allowChromeProcess = true;
--    }
--
--    function createLocalClient() {
--      return new DebuggerClient(DebuggerServer.connectPipe());
--    }
--
--    createLocalServer();
--    const client = createLocalClient();
-+    this._createLocalServer();
-+    const client = this._createLocalClient();
- 
-     // Connect the local client to the local server
-     await client.connect();
-@@ -97,4 +100,55 @@ exports.TargetFactory = {
-   isKnownTab: function(tab) {
-     return targets.has(tab);
-   },
-+
-+  /**
-+   * Construct a Target. The target will be cached for each addon so that we create only
-+   * one per addon.
-+   *
-+   * @param {Object} addon
-+   *        An addon object with a single 'id' key corresponding to the addon id. We use an object
-+   *        here instead of a string to make use of the same `targets` WeakMap used by tab targets.
-+   *
-+   * @return A target object
-+   */
-+  forAddon: async function(addon) {
-+    let target = targets.get(addon);
-+    if (target) {
-+      return target;
-+    }
-+    const promise = this.createTargetForAddon(addon);
-+    // Immediately set the target's promise in cache to prevent race
-+    targets.set(addon, promise);
-+    target = await promise;
-+    // Then replace the promise with the target object
-+    targets.set(addon, target);
-+    target.once("close", () => {
-+      targets.delete(addon);
-+    });
-+    return target;
-+  },
-+
-+  /**
-+   * Instantiate a target for the given addon.
-+   *
-+   * This will automatically:
-+   * - call RootActor's `getAddon` request to retrieve the WebExtension target actor's form,
-+   * - instantiate a Target instance.
-+   *
-+   * @param {Object} addon
-+   *        An addon object with a single 'id' key corresponding to the addon id.
-+   *
-+   * @return A target object
-+   */
-+  async createTargetForAddon(addon) {
-+    this._createLocalServer();
-+    const client = this._createLocalClient();
-+
-+    // Connect the local client to the local server
-+    await client.connect();
-+
-+    // Fetch the WebExtensionActor's target
-+    const front = await client.mainRoot.getAddon(addon);
-+    return front.connect();
-+  },
- };
 diff --git a/devtools/client/locales/en-US/storage.properties b/devtools/client/locales/en-US/storage.properties
 --- a/devtools/client/locales/en-US/storage.properties
 +++ b/devtools/client/locales/en-US/storage.properties
@@ -161,7 +39,7 @@ diff --git a/devtools/client/locales/en-US/storage.properties b/devtools/client/
  
  # LOCALIZATION NOTE (table.headers.*.*):
  # These strings are the header names of the columns in the Storage Table for
-@@ -67,6 +68,10 @@ table.headers.indexedDB.keyPath2=Key Pat
+@@ -62,6 +63,10 @@ table.headers.indexedDB.keyPath2=Key Pat
  table.headers.indexedDB.autoIncrement=Auto Increment
  table.headers.indexedDB.indexes=Indexes
  
@@ -172,528 +50,16 @@ diff --git a/devtools/client/locales/en-US/storage.properties b/devtools/client/
  # LOCALIZATION NOTE (label.expires.session):
  # This string is displayed in the expires column when the cookie is Session
  # Cookie
-diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
---- a/devtools/client/shared/vendor/moz.build
-+++ b/devtools/client/shared/vendor/moz.build
-@@ -4,15 +4,10 @@
- # License, v. 2.0. If a copy of the MPL was not distributed with this
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
--DIRS += [
--    'stringvalidator',
--]
--
- DevToolsModules(
-     'fluent-react.js',
-     'fluent.js',
-     'immutable.js',
--    'jsol.js',
-     'jszip.js',
-     'lodash.js',
-     'react-dom-factories.js',
-diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/shared/widgets/TableWidget.js
---- a/devtools/client/shared/widgets/TableWidget.js
-+++ b/devtools/client/shared/widgets/TableWidget.js
-@@ -589,13 +589,17 @@ TableWidget.prototype = {
- 
-     if (this._editableFieldsEngine) {
-       this._editableFieldsEngine.selectors = selectors;
-+      this._editableFieldsEngine.items = this.items;
-     } else {
--      this._editableFieldsEngine = new EditableFieldsEngine({
--        root: this.tbody,
--        onTab: this.onEditorTab,
--        onTriggerEvent: "dblclick",
--        selectors: selectors,
--      });
-+      this._editableFieldsEngine = new EditableFieldsEngine(
-+        {
-+          root: this.tbody,
-+          onTab: this.onEditorTab,
-+          onTriggerEvent: "dblclick",
-+          selectors: selectors,
-+          items: this.items,
-+        },
-+      );
- 
-       this._editableFieldsEngine.on("change", this.onChange);
-       this._editableFieldsEngine.on("destroyed", this.onEditorDestroyed);
-@@ -1713,6 +1717,7 @@ function EditableFieldsEngine(options) {
-   this.selectors = options.selectors;
-   this.onTab = options.onTab;
-   this.onTriggerEvent = options.onTriggerEvent || "dblclick";
-+  this.items = options.items;
- 
-   this.edit = this.edit.bind(this);
-   this.cancelEdit = this.cancelEdit.bind(this);
-@@ -1803,6 +1808,15 @@ EditableFieldsEngine.prototype = {
-       return;
-     }
- 
-+    // Some item values are not parsable by the client or server so should not be
-+    // editable. Cells corresponding to item names could still be edited though.
-+    const name = target.getAttribute("data-id");
-+    const value = target.getAttribute("value");
-+    const item = this.items.get(name);
-+    if (name !== value && "editable" in item && !item.editable) {
-+      return;
-+    }
-+
-     target.scrollIntoView(false);
-     target.focus();
- 
-diff --git a/devtools/client/storage/test/browser.ini b/devtools/client/storage/test/browser.ini
---- a/devtools/client/storage/test/browser.ini
-+++ b/devtools/client/storage/test/browser.ini
-@@ -75,3 +75,4 @@ tags = usercontextid
- [browser_storage_sidebar_toggle.js]
- [browser_storage_sidebar_update.js]
- [browser_storage_values.js]
-+[browser_storage_webext_storage_local.js]
-diff --git a/devtools/client/storage/test/browser_storage_webext_storage_local.js b/devtools/client/storage/test/browser_storage_webext_storage_local.js
-new file mode 100644
---- /dev/null
-+++ b/devtools/client/storage/test/browser_storage_webext_storage_local.js
-@@ -0,0 +1,151 @@
-+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* Any copyright is dedicated to the Public Domain.
-+http://creativecommons.org/publicdomain/zero/1.0/ */
-+
-+/* globals browser BigInt */
-+
-+"use strict";
-+
-+const {Toolbox} = require("devtools/client/framework/toolbox");
-+
-+/**
-+* Set up and optionally open the `about:debugging` toolbox for a given extension.
-+* @param {String} extensionId - The id for the extension to be targeted by the toolbox.
-+* @param {Object} options - Configuration options with various optional fields:
-+*   - {Boolean} openToolbox - If true, open the toolbox
-+* @return {Promise} Resolves with a web extension actor target object and the toolbox
-+* and storage objects when the toolbox has been setup
-+*/
-+async function setupExtensionDebuggingToolbox(id, options = {}) {
-+  const {openToolbox = false} = options;
-+
-+  const target = await TargetFactory.forAddon({id});
-+
-+  let toolbox;
-+  let storage;
-+  if (openToolbox) {
-+    const res = await openStoragePanel(null, target, Toolbox.HostType.WINDOW);
-+    // Unlike the other storage actors, "extensionStorage" calls
-+    // `this.storageActor.update` in its `populateStoresForHost` method, so that it is
-+    // listed even when there is no extension page currently open.
-+    info("Waiting for extensionStorage to 'update' after opening toolbox");
-+    await gUI.once("store-objects-edit");
-+    [toolbox, storage] = [res.toolbox, res.storage];
-+  }
-+
-+  return {target, toolbox, storage};
-+}
-+
-+// Pref remains in effect until test completes and is automatically cleared afterwards
-+add_task(async function set_enable_extensionStorage_pref() {
-+  await SpecialPowers.pushPrefEnv({
-+    set: [["devtools.storage.extensionStorage.enabled", true]],
-+  });
-+});
-+
-+/**
-+* Since storage item values are represented in the client as strings in textboxes, not all
-+* JavaScript object types supported by the WE storage local API and its IndexedDB backend
-+* can be successfully stringified for display in the table much less parsed correctly when
-+* the user tries to edit a value in the panel. This test is expected to change over time
-+* as more and more value types are supported.
-+*/
-+add_task(async function test_extension_toolbox_only_supported_values_editable() {
-+  async function background() {
-+    browser.test.onMessage.addListener(async (msg, ...args) => {
-+      switch (msg) {
-+        case "storage-local-set":
-+          await browser.storage.local.set(args[0]);
-+          break;
-+        case "storage-local-get":
-+          const items = await browser.storage.local.get(args[0]);
-+          for (const [key, val] of Object.entries(items)) {
-+            browser.test.assertTrue(
-+              val === args[1],
-+              `New value ${val} is set for key ${key}.`,
-+            );
-+          }
-+
-+          break;
-+        default:
-+          browser.test.fail(`Unexpected test message: ${msg}`);
-+      }
-+
-+      browser.test.sendMessage(`${msg}:done`);
-+    });
-+    browser.test.sendMessage("extension-origin", window.location.origin);
-+  }
-+  const extension = ExtensionTestUtils.loadExtension({
-+    manifest: {
-+      permissions: ["storage"],
-+    },
-+    background,
-+    useAddonManager: "temporary",
-+  });
-+
-+  await extension.startup();
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  const itemsSupported = {
-+    arr: [1, 2],
-+    bool: true,
-+    null: null,
-+    num: 4,
-+    obj: {a: 123},
-+    str: "hi",
-+  };
-+
-+  const itemsUnsupported = {
-+    arrBuffer: new ArrayBuffer(8),
-+    bigint: BigInt(1),
-+    date: new Date(0),
-+    map: (new Map()).set("a", "b"),
-+    regexp: /regexp/,
-+    "set": (new Set()).add(1).add("a"),
-+    undef: undefined,
-+  };
-+
-+  extension.sendMessage("storage-local-set", {...itemsSupported, ...itemsUnsupported});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  const {target} = await setupExtensionDebuggingToolbox(
-+    extension.id,
-+    {openToolbox: true},
-+  );
-+
-+  await selectTreeItem(["extensionStorage", host]);
-+
-+  info("Verify that value types supported by the storage actor are editable");
-+  let validate = true;
-+  const newValue = "anotherValue";
-+  const supportedIds = Object.keys(itemsSupported);
-+  for (const id of supportedIds) {
-+    await editCell(id, "value", newValue, validate);
-+  }
-+
-+  info("Verify that associated values have been changed in the extension");
-+  extension.sendMessage("storage-local-get", Object.keys(itemsSupported), newValue);
-+  await extension.awaitMessage("storage-local-get:done");
-+
-+  info("Verify that value types not supported by the storage actor are uneditable");
-+  const expectedValStrings = {
-+    arrBuffer: "[object ArrayBuffer]",
-+    bigint: "[value bigint]",
-+    date: "[object Date]",
-+    map: "[object Map]",
-+    regexp: "[object RegExp]",
-+    "set": "[object Set]",
-+    undef: "[value undefined]",
-+  };
-+  validate = false;
-+  for (const id of Object.keys(itemsUnsupported)) {
-+    await startCellEdit(id, "value", false);
-+    checkCellUneditable(id, "value");
-+    checkCell(id, "value", expectedValStrings[id]);
-+  }
-+
-+  await gDevTools.closeToolbox(target);
-+  await extension.unload();
-+  await target.destroy();
-+});
-diff --git a/devtools/client/storage/test/head.js b/devtools/client/storage/test/head.js
---- a/devtools/client/storage/test/head.js
-+++ b/devtools/client/storage/test/head.js
-@@ -130,12 +130,16 @@ async function openTabAndSetupStorage(ur
-  *
-  * @param cb {Function} Optional callback, if you don't want to use the returned
-  *                      promise
-+ * @param target {Object} Optional, the target for the toolbox; defaults to a tab target
-+ * @param hostType {Toolbox.HostType} Optional, type of host that will host the toolbox
-  *
-  * @return {Promise} a promise that resolves when the storage inspector is ready
-  */
--var openStoragePanel = async function(cb) {
-+var openStoragePanel = async function(cb, target, hostType) {
-   info("Opening the storage inspector");
--  const target = await TargetFactory.forTab(gBrowser.selectedTab);
-+  if (!target) {
-+    target = await TargetFactory.forTab(gBrowser.selectedTab);
-+  }
- 
-   let storage, toolbox;
- 
-@@ -162,7 +166,7 @@ var openStoragePanel = async function(cb
-   }
- 
-   info("Opening the toolbox");
--  toolbox = await gDevTools.showToolbox(target, "storage");
-+  toolbox = await gDevTools.showToolbox(target, "storage", hostType);
-   storage = toolbox.getPanel("storage");
-   gPanelWindow = storage.panelWindow;
-   gUI = storage.UI;
-@@ -768,6 +772,26 @@ function checkCell(id, column, expected)
- }
- 
- /**
-+ * Check that a cell is not in edit mode.
-+ *
-+ * @param {String} id
-+ *        The uniqueId of the row.
-+ * @param {String} column
-+ *        The id of the column
-+ */
-+function checkCellUneditable(id, column) {
-+  const row = getRowCells(id, true);
-+  const cell = row[column];
-+
-+  const editableFieldsEngine = gUI.table._editableFieldsEngine;
-+  const textbox = editableFieldsEngine.textbox;
-+
-+  // When a field is being edited, the cell is hidden, and the textbox is made visible.
-+  ok(!cell.hidden && textbox.hidden,
-+     `The cell located in column ${column} and row ${id} is not editable.`);
-+}
-+
-+/**
-  * Show or hide a column.
-  *
-  * @param  {String} id
-@@ -837,10 +861,10 @@ async function typeWithTerminator(str, t
-   }
- 
-   info("Typing " + str);
--  EventUtils.sendString(str);
-+  EventUtils.sendString(str, gPanelWindow);
- 
-   info("Pressing " + terminator);
--  EventUtils.synthesizeKey(terminator);
-+  EventUtils.synthesizeKey(terminator, null, gPanelWindow);
- 
-   if (validate) {
-     info("Validating results... waiting for ROW_EDIT event.");
-diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
---- a/devtools/client/storage/ui.js
-+++ b/devtools/client/storage/ui.js
-@@ -8,7 +8,7 @@
- const EventEmitter = require("devtools/shared/event-emitter");
- const {LocalizationHelper, ELLIPSIS} = require("devtools/shared/l10n");
- const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
--const JSOL = require("devtools/client/shared/vendor/jsol");
-+const {parseItemValue} = require("devtools/shared/storage/utils");
- const {KeyCodes} = require("devtools/client/shared/keycodes");
- const { getUnicodeHostname } = require("devtools/client/shared/unicode-url");
- 
-@@ -24,8 +24,6 @@ loader.lazyRequireGetter(this, "TableWid
-                          "devtools/client/shared/widgets/TableWidget", true);
- loader.lazyImporter(this, "VariablesView",
-                     "resource://devtools/client/shared/widgets/VariablesView.jsm");
--loader.lazyRequireGetter(this, "validator",
--                         "devtools/client/shared/vendor/stringvalidator/validator");
- 
- /**
-  * Localization convenience methods.
-@@ -62,7 +60,6 @@ const COOKIE_KEY_MAP = {
- };
- 
- const SAFE_HOSTS_PREFIXES_REGEX = /^(about:|https?:|file:|moz-extension:)/;
--const MATH_REGEX = /(?:(?:^|[-+_*/])(?:\s*-?\d+(\.\d+)?(?:[eE][+-]?\d+)?\s*))+$/;
- 
- // Maximum length of item name to show in context menu label - will be
- // trimmed with ellipsis if it's longer.
-@@ -756,7 +753,10 @@ class StorageUI {
-       itemVar.setGrip(value);
- 
-       // May be the item value is a json or a key value pair itself
--      this.parseItemValue(item.name, value);
-+      const obj = parseItemValue(value);
-+      if (typeof obj === "object") {
-+        this.populateSidebar(item.name, obj);
-+      }
- 
-       // By default the item name and value are shown. If this is the only
-       // information available, then nothing else is to be displayed.
-@@ -789,7 +789,10 @@ class StorageUI {
-         }
- 
-         mainScope.addItem(key, {}, true).setGrip(item[key]);
--        this.parseItemValue(key, item[key]);
-+        const obj = parseItemValue(item[key]);
-+        if (typeof obj === "object") {
-+          this.populateSidebar(item.name, obj);
-+        }
-       }
-     }
- 
-@@ -825,47 +828,13 @@ class StorageUI {
-     return host;
-   }
- 
--  /**
--   * Tries to parse a string value into either a json or a key-value separated
--   * object and populates the sidebar with the parsed value. The value can also
--   * be a key separated array.
-+  /*
-+   * Populates the sidebar with a parsed object.
-    *
--   * @param {string} name
--   *        The key corresponding to the `value` string in the object
--   * @param {string} originalValue
--   *        The string to be parsed into an object
-+   * @param {object} obj - Either a json or a key-value separated object or a
-+   * key separated array
-    */
--  parseItemValue(name, originalValue) {
--    // Find if value is URLEncoded ie
--    let decodedValue = "";
--    try {
--      decodedValue = decodeURIComponent(originalValue);
--    } catch (e) {
--      // Unable to decode, nothing to do
--    }
--    const value = (decodedValue && decodedValue !== originalValue)
--      ? decodedValue : originalValue;
--
--    if (!this._shouldParse(value)) {
--      return;
--    }
--
--    let obj = null;
--    try {
--      obj = JSOL.parse(value);
--    } catch (ex) {
--      obj = null;
--    }
--
--    if (!obj && value) {
--      obj = this._extractKeyValPairs(value);
--    }
--
--    // return if obj is null, or same as value, or just a string.
--    if (!obj || obj === value || typeof obj === "string") {
--      return;
--    }
--
-+  populateSidebar(name, obj) {
-     const jsonObject = Object.create(null);
-     const view = this.view;
-     jsonObject[name] = obj;
-@@ -879,97 +848,6 @@ class StorageUI {
-   }
- 
-   /**
--   * Tries to parse a string into an object on the basis of key-value pairs,
--   * separated by various separators. If failed, tries to parse for single
--   * separator separated values to form an array.
--   *
--   * @param {string} value
--   *        The string to be parsed into an object or array
--   */
--  _extractKeyValPairs(value) {
--    const makeObject = (keySep, pairSep) => {
--      const object = {};
--      for (const pair of value.split(pairSep)) {
--        const [key, val] = pair.split(keySep);
--        object[key] = val;
--      }
--      return object;
--    };
--
--    // Possible separators.
--    const separators = ["=", ":", "~", "#", "&", "\\*", ",", "\\."];
--    // Testing for object
--    for (let i = 0; i < separators.length; i++) {
--      const kv = separators[i];
--      for (let j = 0; j < separators.length; j++) {
--        if (i == j) {
--          continue;
--        }
--        const p = separators[j];
--        const word = `[^${kv}${p}]*`;
--        const keyValue = `${word}${kv}${word}`;
--        const keyValueList = `${keyValue}(${p}${keyValue})*`;
--        const regex = new RegExp(`^${keyValueList}$`);
--        if (value.match && value.match(regex) && value.includes(kv) &&
--            (value.includes(p) || value.split(kv).length == 2)) {
--          return makeObject(kv, p);
--        }
--      }
--    }
--    // Testing for array
--    for (const p of separators) {
--      const word = `[^${p}]*`;
--      const wordList = `(${word}${p})+${word}`;
--      const regex = new RegExp(`^${wordList}$`);
--
--      if (regex.test(value)) {
--        const pNoBackslash = p.replace(/\\*/g, "");
--        return value.split(pNoBackslash);
--      }
--    }
--    return null;
--  }
--
--  /**
--   * Check whether the value string represents something that should be
--   * displayed as text. If so then it shouldn't be parsed into a tree.
--   *
--   * @param  {String} value
--   *         The value to be parsed.
--   */
--  _shouldParse(value) {
--    const validators = [
--      "isBase64",
--      "isBoolean",
--      "isCurrency",
--      "isDataURI",
--      "isEmail",
--      "isFQDN",
--      "isHexColor",
--      "isIP",
--      "isISO8601",
--      "isMACAddress",
--      "isSemVer",
--      "isURL",
--    ];
--
--    // Check for minus calculations e.g. 8-3 because otherwise 5 will be displayed.
--    if (MATH_REGEX.test(value)) {
--      return false;
--    }
--
--    // Check for any other types that shouldn't be parsed.
--    for (const test of validators) {
--      if (validator[test](value)) {
--        return false;
--      }
--    }
--
--    // Seems like this is data that should be parsed.
--    return true;
--  }
--
--  /**
-    * Select handler for the storage tree. Fetches details of the selected item
-    * from the storage details and populates the storage tree.
-    *
 diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
 --- a/devtools/server/actors/storage.js
 +++ b/devtools/server/actors/storage.js
-@@ -12,12 +12,21 @@ const Services = require("Services");
+@@ -12,12 +12,18 @@ const Services = require("Services");
  const defer = require("devtools/shared/defer");
  const {isWindowIncluded} = require("devtools/shared/layout/utils");
  const specs = require("devtools/shared/specs/storage");
-+const {parseItemValue} = require("devtools/shared/storage/utils");
 +const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
 +const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
 +const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
-+
-+const lodash = require("devtools/client/shared/vendor/lodash");
  
  const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
  const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
@@ -706,119 +72,13 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1309,607 @@ StorageActors.createActor({
+@@ -1300,6 +1306,408 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
 +const extensionStorageHelpers = {
 +  unresolvedPromises: new Map(),
 +  onChangedListeners: new Map(),
-+  typesFromString: { // Helper methods to parse string values in editItem
-+    jsonifiable: {
-+      test(str) {
-+        try {
-+          JSON.parse(str);
-+        } catch (e) {
-+          return false;
-+        }
-+        return true;
-+      },
-+      parse(str) {
-+        return JSON.parse(str);
-+      },
-+    },
-+  },
-+  supportedTypes: { // Helper methods to determine the value type of an item in isEditable
-+    array: {
-+      test(value) {
-+        return Array.isArray(value);
-+      },
-+    },
-+    boolean: {
-+      test(value) {
-+        return typeof value === "boolean";
-+      },
-+    },
-+    null: {
-+      test(value) {
-+        return value === null;
-+      },
-+    },
-+    number: {
-+      test(value) {
-+        return typeof value === "number";
-+      },
-+    },
-+    object: {
-+      test(value) {
-+        return lodash.isPlainObject(value);
-+      },
-+    },
-+    string: {
-+      test(value) {
-+        return typeof value === "string";
-+      },
-+    },
-+  },
-+  unsupportedTypes: { // Used to display a string in the client in toStoreObject
-+    arrayBuffer: {
-+      test(value) {
-+        return lodash.isArrayBuffer(value);
-+      },
-+      stringify(value) {
-+        return "[object ArrayBuffer]";
-+      },
-+    },
-+    bigint: {
-+      test(value) {
-+        // eslint-disable-next-line
-+        return typeof value === "bigint";
-+      },
-+      stringify(value) {
-+        return "[value bigint]";
-+      },
-+    },
-+    date: {
-+      test(value) {
-+        return lodash.isDate(value);
-+      },
-+      stringify(value) {
-+        return "[object Date]";
-+      },
-+    },
-+    map: {
-+      test(value) {
-+        return lodash.isMap(value);
-+      },
-+      stringify(value) {
-+        return "[object Map]";
-+      },
-+    },
-+    "set": {
-+      test(value) {
-+        return lodash.isSet(value);
-+      },
-+      stringify(value) {
-+        return "[object Set]";
-+      },
-+    },
-+    regexp: {
-+      test(value) {
-+        return lodash.isRegExp(value);
-+      },
-+      stringify(value) {
-+        return "[object RegExp]";
-+      },
-+    },
-+    undefined: {
-+      test(value) {
-+        return typeof value === "undefined";
-+      },
-+      stringify(value) {
-+        return "[value undefined]";
-+      },
-+    },
-+  },
 +
 +  // Sets the parent process message manager
 +  setPpmm(ppmm) {
@@ -842,9 +102,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    const parentResult = await ExtensionStorageIDB.selectBackend({extension});
 +    const result = {
 +      ...parentResult,
-+      // We have to deserialize the result here before sending it back to the
-+      // child process, otherwise we get the StructuredCloneHolder object for
-+      // storagePrincipal instead
++      // Received as a StructuredCloneHolder, so we need to deserialize
 +      storagePrincipal: parentResult.storagePrincipal.deserialize(this, true),
 +    };
 +
@@ -863,7 +121,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +  },
 +
 +  onDisconnected() {
-+    // Remove any listener subscribed to intercept storage.onChanged API events.
 +    for (const [messageName, listener] of this.onChangedListeners) {
 +      Services.ppmm.removeMessageListener(messageName, listener);
 +    }
@@ -1027,7 +284,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +    /**
 +    * This fires when the extension changes storage data while the storage
 +    * inspector is open. Ensures this.hostVsStores stays up-to-date and
-+    * passes the change on to update the view.
++    * passes the change on to update the client.
 +    */
 +    onStorageChange({name, data}) {
 +      const host = `moz-extension://${data.extensionUUID}`;
@@ -1178,21 +435,20 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      const {name, value} = item;
 +
 +      let newValue;
-+      const editable = this.isEditable(value);
 +      if (typeof value === "string") {
 +        newValue = value;
-+      } else if (editable) {
-+        newValue = JSON.stringify(value);
 +      } else {
-+        // We don't cover every possible unsupported JS object explicitly, so assign
-+        // this as a failsafe.
-+        newValue = "[value uneditable]";
-+        const {unsupportedTypes} = extensionStorageHelpers;
-+        for (const {test, stringify} of Object.values(unsupportedTypes)) {
-+          if (test(value)) {
-+            newValue = stringify(value);
-+            break;
-+          }
++        try {
++          newValue = JSON.stringify(value) || String(value);
++        } catch (error) {
++          // throws for bigint
++          newValue = String(value);
++        }
++
++        // JavaScript objects that are not JSON stringifiable will be represented
++        // by the string "Object"
++        if (newValue === "{}") {
++          newValue = "Object";
 +        }
 +      }
 +
@@ -1209,19 +465,1849 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +        name,
 +        value: new LongStringActor(this.conn, newValue || ""),
 +        area: "local", // Bug 1542038, 1542039: set the correct storage area
-+        editable,
 +      };
 +    },
 +
 +    getFields() {
 +      return [
-+        // name needs to be editable for the addItem case, where a temporary key-value
-+        // pair is created that can later be edited via editItem.
-+        { name: "name", editable: true },
-+        { name: "value", editable: true },
++        { name: "name", editable: false },
++        { name: "value", editable: false },
 +        { name: "area", editable: false },
 +      ];
 +    },
++  });
++}
++
+ StorageActors.createActor({
+   typeName: "Cache",
+ }, {
+@@ -2690,9 +3098,12 @@ const StorageActor = protocol.ActorClass
+         (!subject.location.href || subject.location.href == "about:blank")) {
+       return null;
+     }
+-
+-    if (topic == "content-document-global-created" &&
+-        this.isIncludedInTopLevelWindow(subject)) {
++    // We don't want to try to find a top level window for an extension page, as
++    // in many cases (e.g. background page), it is not loaded in a tab, and
++    // 'isIncludedInTopLevelWindow' throws an error
++    if (topic == "content-document-global-created"
++      && (subject.location.href.startsWith("moz-extension://")
++      || this.isIncludedInTopLevelWindow(subject))) {
+       this.childWindowPool.add(subject);
+       this.emit("window-ready", subject);
+     } else if (topic == "inner-window-destroyed") {
+@@ -2747,6 +3158,11 @@ const StorageActor = protocol.ActorClass
+     const toReturn = {};
+ 
+     for (const [name, value] of this.childActorPool) {
++      // Only list extensionStorage for the add-on storage panel
++      if (name === "extensionStorage"
++        && (!value.storageActor.parentActor.addonId)) {
++        continue;
++      }
+       if (value.preListStores) {
+         await value.preListStores();
+       }
+diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
+--- a/devtools/server/tests/browser/browser.ini
++++ b/devtools/server/tests/browser/browser.ini
+@@ -133,6 +133,7 @@ skip-if = e10s # Bug 1183605 - devtools/
+ [browser_storage_dynamic_windows.js]
+ [browser_storage_listings.js]
+ [browser_storage_updates.js]
++[browser_storage_webext_storage_local.js]
+ [browser_stylesheets_getTextEmpty.js]
+ [browser_stylesheets_nested-iframes.js]
+ [browser_register_actor.js]
+diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.js b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
+@@ -0,0 +1,35 @@
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++http://creativecommons.org/publicdomain/zero/1.0/ */
++
++"use strict";
++
++// Pref remains in effect until test completes and is automatically cleared afterwards
++add_task(async function set_enable_extensionStorage_pref() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["devtools.storage.extensionStorage.enabled", true]],
++  });
++});
++
++add_task(async function test_extensionStorage_disabled_for_non_extension_target() {
++  info("Setting up and connecting Debugger Server and Client in main process");
++  initDebuggerServer();
++  const transport = DebuggerServer.connectPipe();
++  const client = new DebuggerClient(transport);
++  await client.connect();
++
++  info("Opening a non-extension page in a tab");
++  const target = await addTabTarget("data:text/html;charset=utf-8,");
++
++  info("Getting all stores for the target process");
++  const storageFront = await target.getFront("storage");
++  const stores = await storageFront.listStores();
++
++  ok(
++    !("extensionStorage" in stores),
++    "Should not have an extensionStorage store when non-extension process is targeted"
++  );
++
++  await target.destroy();
++  gBrowser.removeCurrentTab();
++});
+diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/server/tests/unit/test_extension_storage_actor.js
+@@ -0,0 +1,756 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++/* globals browser */
++
++"use strict";
++
++const {
++  AddonTestUtils,
++} = ChromeUtils.import("resource://testing-common/AddonTestUtils.jsm");
++
++const {
++  FileUtils,
++} = ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
++
++const {
++  ExtensionTestUtils,
++} = ChromeUtils.import("resource://testing-common/ExtensionXPCShellUtils.jsm");
++
++const {
++  createAppInfo,
++  promiseStartupManager,
++} = AddonTestUtils;
++
++const LEAVE_UUID_PREF = "extensions.webextensions.keepUuidOnUninstall";
++const LEAVE_STORAGE_PREF = "extensions.webextensions.keepStorageOnUninstall";
++const EXTENSION_STORAGE_ENABLED_PREF = "devtools.storage.extensionStorage.enabled";
++
++AddonTestUtils.init(this);
++createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
++
++ExtensionTestUtils.init(this);
++
++// This storage actor is gated behind a pref, so make sure it is enabled first
++Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, true);
++registerCleanupFunction(() => {
++  Services.prefs.clearUserPref(EXTENSION_STORAGE_ENABLED_PREF);
++});
++
++/**
++* Starts up and connects the Debugger server to the DevTools client (both in the main
++* process) by listening over an nsIPipe, so that they can send remote debugging
++* protocol messages to each other.
++*
++* @return {Promise} Resolves with a client object when the debugger has started up.
++*/
++async function startDebugger() {
++  DebuggerServer.init();
++  DebuggerServer.registerAllActors();
++  const transport = DebuggerServer.connectPipe();
++  const client = new DebuggerClient(transport);
++  await client.connect();
++  return client;
++}
++
++/**
++* Set up the equivalent of an `about:debugging` toolbox for a given extension, minus
++* the toolbox.
++*
++* @param {String} id - The id for the extension to be targeted by the toolbox.
++* @return {Object} Resolves with the web extension actor front and target objects when
++* the debugger has been connected to the extension.
++*/
++async function setupExtensionDebugging(id) {
++  const client = await startDebugger();
++  const front = await client.mainRoot.getAddon({id});
++  // Starts a DevTools server in the extension child process.
++  const target = await front.connect();
++  return {front, target};
++}
++
++/**
++* Loads and starts up a test extension given the provided extension configuration.
++*
++* @param {Object} extConfig - The extension configuration object
++* @return {ExtensionWrapper} extension - Resolves with an extension object once the
++* extension has started up.
++*/
++async function startupExtension(extConfig) {
++  const extension = ExtensionTestUtils.loadExtension(extConfig);
++
++  await extension.startup();
++
++  return extension;
++}
++
++/**
++* Opens the addon debugger's storage panel
++*
++* @param {String} - id, The addon id
++* @return {Object} - Resolves with the web extension actor target and extensionStorage
++* store objects when the panel has been opened.
++*/
++async function openAddonStoragePanel(id) {
++  const {target} = await setupExtensionDebugging(id);
++
++  const storageFront = await target.getFront("storage");
++  const stores = await storageFront.listStores();
++  const extensionStorage = stores.extensionStorage || null;
++
++  return {target, extensionStorage};
++}
++
++/**
++* Builds the extension configuration object passed into ExtensionTestUtils.loadExtension
++*
++* @param {Object} options - Options, if any, to add to the configuration
++* @param {Function} options.background - A function comprising the test extension's
++* background script if provided
++* @param {Object} options.files - An object whose keys correspond to file names and
++* values map to the file contents
++* @param {Object} options.manifest - An object representing the extension's manifest
++* @return {Object} - The extension configuration object
++*/
++function getExtensionConfig(options = {}) {
++  const {manifest, ...otherOptions} = options;
++  const baseConfig = {
++    manifest: {
++      ...manifest,
++      permissions: ["storage"],
++    },
++    useAddonManager: "temporary",
++  };
++  return {
++    ...baseConfig,
++    ...otherOptions,
++  };
++}
++
++/**
++* An extension script that can be used in any extension context (e.g. as a background
++* script or as an extension page script loaded in a tab).
++*/
++async function extensionScriptWithMessageListener() {
++  browser.test.onMessage.addListener(async (msg, ...args) => {
++    let value = null;
++    switch (msg) {
++      case "storage-local-set":
++        await browser.storage.local.set(args[0]);
++        break;
++      case "storage-local-get":
++        value = (await browser.storage.local.get(args[0]))[args[0]];
++        break;
++      case "storage-local-remove":
++        await browser.storage.local.remove(args[0]);
++        break;
++      case "storage-local-clear":
++        await browser.storage.local.clear();
++        break;
++      default:
++        browser.test.fail(`Unexpected test message: ${msg}`);
++    }
++
++    browser.test.sendMessage(`${msg}:done`, value);
++  });
++  browser.test.sendMessage("extension-origin", window.location.origin);
++}
++
++/**
++* Shared files for a test extension that has no background page but adds storage
++* items via a transient extension page in a tab
++*/
++const ext_no_bg = {
++  files: {
++    "extension_page_in_tab.html": `<!DOCTYPE html>
++      <html>
++        <head>
++          <meta charset="utf-8">
++        </head>
++        <body>
++          <h1>Extension Page in a Tab</h1>
++          <script src="extension_page_in_tab.js"></script>
++        </body>
++      </html>`,
++    "extension_page_in_tab.js": extensionScriptWithMessageListener,
++  },
++};
++
++/**
++* Shutdown procedure common to all tasks.
++*
++* @param {Object} extension - The test extension
++* @param {Object} target - The web extension actor targeted by the DevTools client
++*/
++async function shutdown(extension, target) {
++  if (target) {
++    await target.destroy();
++  }
++  await extension.unload();
++}
++
++/**
++ * Mocks the missing 'storage/permanent' directory needed by the "indexedDB"
++ * storage actor's 'preListStores' method (called when 'listStores' is called). This
++ * directory exists in a full browser i.e. mochitest.
++ */
++function createMissingIndexedDBDirs() {
++  const dir = (Services.dirsvc.get("ProfD", Ci.nsIFile)).clone();
++  dir.append("storage");
++  if (!dir.exists()) {
++    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
++  }
++  dir.append("permanent");
++  if (!dir.exists()) {
++    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
++  }
++  Assert.ok(dir.exists(), "Should have a 'storage/permanent' dir in the profile dir");
++}
++
++add_task(async function setup() {
++  await promiseStartupManager();
++  createMissingIndexedDBDirs();
++});
++
++add_task(async function test_extension_store_exists() {
++  const extension = await startupExtension(getExtensionConfig());
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  ok(extensionStorage, "Should have an extensionStorage store");
++
++  await shutdown(extension, target);
++});
++
++add_task(async function test_extension_origin_matches_debugger_target() {
++  async function background() {
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++
++  const extension = await startupExtension(getExtensionConfig({background}));
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  const {hosts} = extensionStorage;
++  const expectedHost = await extension.awaitMessage("extension-origin");
++  ok(expectedHost in hosts,
++     "Should have the expected extension host in the extensionStorage store");
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Background page modifies items while storage panel is open.
++* - Load extension with background page.
++* - Open the add-on debugger storage panel.
++* - With the panel still open, from the extension background page:
++*   - Bulk add storage items
++*   - Edit the values of some of the storage items
++*   - Remove some storage items
++*   - Clear all storage items
++* - For each modification, the storage data in the panel should match the
++*   changes made by the extension.
++*/
++add_task(async function test_panel_live_updates() {
++  const extension = await startupExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener}),
++  );
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
++
++  info("Waiting for extension to bulk add 50 items to storage local");
++  const bulkStorageItems = {};
++  // limited by MAX_STORE_OBJECT_COUNT in devtools/server/actors/storage.js
++  const numItems = 2;
++  for (let i = 1; i <= numItems; i++) {
++    bulkStorageItems[i] = i;
++  }
++
++  extension.sendMessage("storage-local-set", {
++    ...bulkStorageItems,
++    a: 123,
++    b: [4, 5],
++    c: {d: 678},
++    d: true,
++    e: "hi",
++    f: null,
++  });
++  await extension.awaitMessage("storage-local-set:done");
++
++  info("Confirming items added by extension match items in extensionStorage store");
++  const bulkStorageObjects = [];
++  for (const [name, value] of Object.entries(bulkStorageItems)) {
++    bulkStorageObjects.push({
++      area: "local",
++      name,
++      value: {str: String(value)},
++    });
++  }
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [
++      ...bulkStorageObjects,
++      {area: "local", name: "a", value: {str: "123"}},
++      {area: "local", name: "b", value: {str: "[4,5]"}},
++      {area: "local", name: "c", value: {str: "{\"d\":678}"}},
++      {area: "local", name: "d", value: {str: "true"}},
++      {area: "local", name: "e", value: {str: "hi"}},
++      {area: "local", name: "f", value: {str: "null"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  info("Waiting for extension to edit a few storage item values");
++  extension.sendMessage("storage-local-set", {
++    a: ["c", "d"],
++    b: 456,
++    c: false,
++  });
++  await extension.awaitMessage("storage-local-set:done");
++
++  info("Confirming items edited by extension match items in extensionStorage store");
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [
++      ...bulkStorageObjects,
++      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}},
++      {area: "local", name: "b", value: {str: "456"}},
++      {area: "local", name: "c", value: {str: "false"}},
++      {area: "local", name: "d", value: {str: "true"}},
++      {area: "local", name: "e", value: {str: "hi"}},
++      {area: "local", name: "f", value: {str: "null"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  info("Waiting for extension to remove a few storage item values");
++  extension.sendMessage("storage-local-remove", ["d", "e", "f"]);
++  await extension.awaitMessage("storage-local-remove:done");
++
++  info("Confirming items removed by extension were removed in extensionStorage store");
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [
++      ...bulkStorageObjects,
++      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}},
++      {area: "local", name: "b", value: {str: "456"}},
++      {area: "local", name: "c", value: {str: "false"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  info("Waiting for extension to remove all remaining storage items");
++  extension.sendMessage("storage-local-clear");
++  await extension.awaitMessage("storage-local-clear:done");
++
++  info("Confirming extensionStorage store was cleared");
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: No bg page. Transient page adds item before storage panel opened.
++* - Load extension with no background page.
++* - Open an extension page in a tab that adds a local storage item.
++* - With the extension page still open, open the add-on storage panel.
++* - The data in the storage panel should match the items added by the extension.
++*/
++add_task(async function test_panel_data_matches_extension_with_transient_page_open() {
++  const extension = await startupExtension(getExtensionConfig({files: ext_no_bg.files}));
++
++  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
++  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await contentPage.close();
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: No bg page. Transient page adds item then closes before storage panel opened.
++* - Load extension with no background page.
++* - Open an extension page in a tab that adds a local storage item.
++* - Close all extension pages.
++* - Open the add-on storage panel.
++* - The data in the storage panel should match the item added by the extension.
++*/
++add_task(async function test_panel_data_matches_extension_with_no_pages_open() {
++  const extension = await startupExtension(getExtensionConfig({files: ext_no_bg.files}));
++
++  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
++  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await contentPage.close();
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: No bg page. Storage panel live updates when a transient page adds an item.
++* - Load extension with no background page.
++* - Open the add-on storage panel.
++* - With the storage panel still open, open an extension page in a new tab that adds an
++*   item.
++* - Assert:
++*   - The data in the storage panel should live update to match the item added by the
++*     extension.
++*   - If an extension page adds the same data again, the data in the storage panel should
++*     not change.
++*/
++add_task(async function test_panel_data_live_updates_for_extension_without_bg_page() {
++  const extension = await startupExtension(getExtensionConfig({files: ext_no_bg.files}));
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
++  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "The results are unchanged when an extension page adds duplicate items"
++  );
++
++  await contentPage.close();
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Storage panel shows extension storage data added prior to extension startup
++* - Load extension that adds a storage item
++* - Uninstall the extension
++* - Reinstall the extension
++* - Open the add-on storage panel.
++* - The data in the storage panel should match the data added the first time the extension
++*   was installed
++* Related test case: Storage panel shows extension storage data when an extension that has
++* already migrated to the IndexedDB storage backend prior to extension startup adds
++* another storage item.
++* - (Building from previous steps)
++* - The reinstalled extension adds a storage item
++* - The data in the storage panel should live update with both items: the item added from
++*   the first and the item added from the reinstall.
++*/
++add_task(async function test_panel_data_matches_data_added_prior_to_ext_startup() {
++  // The pref to leave the addonid->uuid mapping around after uninstall so that we can
++  // re-attach to the same storage
++  Services.prefs.setBoolPref(LEAVE_UUID_PREF, true);
++
++  // The pref to prevent cleaning up storage on uninstall
++  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, true);
++
++  let extension = await startupExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener}),
++  );
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await shutdown(extension);
++
++  // Reinstall the same extension
++  extension = await startupExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener})
++  );
++
++  await extension.awaitMessage("extension-origin");
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  let {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  // Related test case
++  extension.sendMessage("storage-local-set", {b: 456});
++  await extension.awaitMessage("storage-local-set:done");
++
++  data = (await extensionStorage.getStoreObjects(host)).data;
++  Assert.deepEqual(
++    data,
++    [
++      {area: "local", name: "a", value: {str: "123"}},
++      {area: "local", name: "b", value: {str: "456"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
++  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
++
++  await shutdown(extension, target);
++});
++
++add_task(function cleanup_for_test_panel_data_matches_data_added_prior_to_ext_startup() {
++  Services.prefs.clearUserPref(LEAVE_UUID_PREF);
++  Services.prefs.clearUserPref(LEAVE_STORAGE_PREF);
++});
++
++/**
++* Test case: Bg page adds an item to storage. With storage panel open, reload extension.
++* - Load extension with background page that adds a storage item on message.
++* - Open the add-on storage panel.
++* - With the storage panel still open, reload the extension.
++* - The data in the storage panel should match the item added prior to reloading.
++*/
++add_task(async function test_panel_live_reload() {
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading extension version 1.0");
++  const extension = await startupExtension(
++    getExtensionConfig({
++      manifest,
++      background: extensionScriptWithMessageListener,
++    })
++  );
++
++  info("Waiting for message from test extension");
++  const host = await extension.awaitMessage("extension-origin");
++
++  info("Adding storage item");
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Update to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      background: extensionScriptWithMessageListener,
++    }),
++  );
++
++  await extension.awaitMessage("extension-origin");
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Transient page adds an item to storage. With storage panel open,
++* reload extension.
++* - Load extension with no background page.
++* - Open transient page that adds a storage item on message.
++* - Open the add-on storage panel.
++* - With the storage panel still open, reload the extension.
++* - The data in the storage panel should match the item added prior to reloading.
++*/
++add_task(async function test_panel_live_reload_for_extension_without_bg_page() {
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading and starting extension version 1.0");
++  const extension = await startupExtension(getExtensionConfig({
++    manifest,
++    files: ext_no_bg.files,
++  }));
++
++  info("Opening extension page in a tab");
++  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
++  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  info("Waiting for extension page in a tab to add storage item");
++  extension.sendMessage("storage-local-set", {a: 123});
++  await extension.awaitMessage("storage-local-set:done");
++
++  await contentPage.close();
++
++  info("Opening storage panel");
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Updating extension to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      files: ext_no_bg.files,
++    })
++  );
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [{area: "local", name: "a", value: {str: "123"}}],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
++* Test case: Bg page auto adds item(s). With storage panel open, reload extension.
++* - Load extension with background page that automatically adds a storage item on startup.
++* - Open the add-on storage panel.
++* - With the storage panel still open, reload the extension.
++* - The data in the storage panel should match the item(s) added by the reloaded
++*   extension.
++*/
++add_task(async function test_panel_live_reload_when_extension_auto_adds_items() {
++  async function background() {
++    await browser.storage.local.set({a: {b: 123}, c: {d: 456}});
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
++  let manifest = {
++    version: "1.0",
++    applications: {
++      gecko: {
++        id: EXTENSION_ID,
++      },
++    },
++  };
++
++  info("Loading and starting extension version 1.0");
++  const extension = await startupExtension(getExtensionConfig({manifest, background}));
++
++  info("Waiting for message from test extension");
++  const host = await extension.awaitMessage("extension-origin");
++
++  info("Opening storage panel");
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  manifest = {
++    ...manifest,
++    version: "2.0",
++  };
++  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
++  info("Update to version 2.0");
++  await extension.upgrade(
++    getExtensionConfig({
++      manifest,
++      background,
++    }),
++  );
++
++  await extension.awaitMessage("extension-origin");
++
++  const {data} = await extensionStorage.getStoreObjects(host);
++  Assert.deepEqual(
++    data,
++    [
++      {area: "local", name: "a", value: {str: "{\"b\":123}"}},
++      {area: "local", name: "c", value: {str: "{\"d\":456}"}},
++    ],
++    "Got the expected results on populated storage.local"
++  );
++
++  await shutdown(extension, target);
++});
++
++/*
++* This task should be last, as it sets a pref to disable the extensionStorage
++* storage actor. Since this pref is set at the beginning of the file, it
++* already will be cleared via registerCleanupFunction when the test finishes.
++*/
++add_task(async function test_extensionStorage_store_disabled_on_pref() {
++  Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, false);
++
++  const extension = await startupExtension(getExtensionConfig());
++
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
++
++  ok(
++    extensionStorage === null,
++    "Should not have an extensionStorage store when pref disabled"
++  );
++
++  await shutdown(extension, target);
++});
+diff --git a/devtools/server/tests/unit/xpcshell.ini b/devtools/server/tests/unit/xpcshell.ini
+--- a/devtools/server/tests/unit/xpcshell.ini
++++ b/devtools/server/tests/unit/xpcshell.ini
+@@ -59,6 +59,7 @@ support-files =
+ [test_blackboxing-05.js]
+ [test_blackboxing-07.js]
+ [test_blackboxing-08.js]
++[test_extension_storage_actor.js]
+ [test_frameactor-01.js]
+ [test_frameactor-02.js]
+ [test_frameactor-03.js]
+diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
+--- a/devtools/shared/specs/storage.js
++++ b/devtools/shared/specs/storage.js
+@@ -163,6 +163,23 @@ createStorageSpec({
+   methods: storageMethods,
+ });
+ 
++types.addDictType("extensionobject", {
++  name: "nullable:string",
++  value: "nullable:longstring",
++});
++
++types.addDictType("extensionstoreobject", {
++  total: "number",
++  offset: "number",
++  data: "array:nullable:extensionobject",
++});
++
++createStorageSpec({
++  typeName: "extensionStorage",
++  storeObjectType: "extensionstoreobject",
++  methods: {},
++});
++
+ types.addDictType("cacheobject", {
+   "url": "string",
+   "status": "string",
+diff --git a/toolkit/components/extensions/ExtensionStorageIDB.jsm b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+--- a/toolkit/components/extensions/ExtensionStorageIDB.jsm
++++ b/toolkit/components/extensions/ExtensionStorageIDB.jsm
+@@ -599,6 +599,11 @@ this.ExtensionStorageIDB = {
+         const serializedPrincipal = new StructuredCloneHolder(storagePrincipal, this);
+ 
+         promise = migrateJSONFileData(extension, storagePrincipal).then(() => {
++          extension.setSharedData("storageIDBBackend", true);
++          if (storagePrincipal) {
++            extension.setSharedData("storageIDBPrincipal", storagePrincipal);
++          }
++          Services.ppmm.sharedData.flush();
+           return {backendEnabled: true, storagePrincipal: serializedPrincipal};
+         }).catch(err => {
+           // If the data migration promise is rejected, the old data has been read
+@@ -612,6 +617,9 @@ this.ExtensionStorageIDB = {
+           // data about it may be useful.
+           extension.logWarning("JSONFile backend is being kept enabled by an unexpected " +
+                                `IDBBackend failure: ${err.message}::${err.stack}`);
++          extension.setSharedData("storageIDBBackend", false);
++          Services.ppmm.sharedData.flush();
++
+           return {backendEnabled: false};
+         });
+       }
+diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
+--- a/toolkit/components/extensions/parent/ext-storage.js
++++ b/toolkit/components/extensions/parent/ext-storage.js
+@@ -8,6 +8,8 @@ XPCOMUtils.defineLazyModuleGetters(this,
+   NativeManifests: "resource://gre/modules/NativeManifests.jsm",
+ });
+ 
++var {ExtensionParent} = ChromeUtils.import("resource://gre/modules/ExtensionParent.jsm");
++
+ var {
+   ExtensionError,
+ } = ExtensionUtils;
+@@ -37,6 +39,21 @@ const lookupManagedStorage = async (exte
+   return null;
+ };
+ 
++// Notify storage actor when storage data has changed if the extension is targeted
++// by a developer toolbox.
++function notifyDevToolsListeners(extension, changes) {
++  const {DebugUtils} = ExtensionParent;
++  let debugBrowserPromise = DebugUtils.debugBrowserPromises.get(extension.id);
++  if (debugBrowserPromise) {
++    (async () => {
++      const browser = await debugBrowserPromise;
++      browser.messageManager.sendAsyncMessage(
++        `Extension:DevTools:OnStorageLocalChanged`,
++        {changes, extensionUUID: extension.uuid});
++    })();
++  }
++}
++
+ this.storage = class extends ExtensionAPI {
+   constructor(extension) {
+     super(extension);
+@@ -82,6 +99,7 @@ this.storage = class extends ExtensionAP
+             const changes = await db[method](...args);
+             if (changes) {
+               ExtensionStorageIDB.notifyListeners(extension.id, changes);
++              notifyDevToolsListeners(extension, changes);
+             }
+             return changes;
+           },
+# HG changeset patch
+# User Bianca Danforth <bdanforth@mozilla.com>
+# Date 1560110743 25200
+#      Sun Jun 09 13:05:43 2019 -0700
+# Node ID 8085efc94b0ed754918a1f9dbe564288b18711b1
+# Parent  0cffb9f87871de329c9158ada01f5210b732a19b
+Bug 1542035 - Add limited write support for extension storage.local in addon debugger
+
+* Update the extensionStorage actor to enable some writing to extension storage.local through the Storage panel client.
+* All values in the client are displayed as strings, so the actor must stringify them before sending them to the client and parse them when receiving changes from the client. For this reason, there is currently limited write support.
+  * Storage item values that are JSONifiable (numbers, strings, booleans, object literals, arrays and null) can be modified in the Storage panel.
+  * Non-JSONifiable values cannot be modified, and will be represented by "[value *]" or "[object *]" in the panel, where * depends on the value type.
+  * Storage item names can be modified in the storage panel.
+* In-line comments referencing Bugs 1542038 and 1542039 indicate places where the implementation may differ for local storage versus the other storage areas in the actor.
+* The parseItemValue method used in the client was moved to a shared directory, so that the actor could parse string values from the client in its editItem method.
+
+Differential Revision: https://phabricator.services.mozilla.com/D34416
+
+diff --git a/.eslintignore b/.eslintignore
+--- a/.eslintignore
++++ b/.eslintignore
+@@ -170,6 +170,7 @@ devtools/shared/node-properties/*
+ devtools/shared/pretty-fast/*
+ devtools/shared/sourcemap/*
+ devtools/shared/sprintfjs/*
++devtools/shared/storage/vendor/*
+ devtools/shared/qrcode/decoder/*
+ devtools/shared/qrcode/encoder/*
+ devtools/client/inspector/markup/test/lib_*
+diff --git a/devtools/client/framework/target.js b/devtools/client/framework/target.js
+--- a/devtools/client/framework/target.js
++++ b/devtools/client/framework/target.js
+@@ -14,6 +14,31 @@ const targets = new WeakMap();
+  * Functions for creating Targets
+  */
+ exports.TargetFactory = {
++  /**
++  * Spawn a DebuggerServer in the parent process
++  */
++  _createLocalServer() {
++    // Since a remote protocol connection will be made, let's start the
++    // DebuggerServer here, once and for all tools.
++    DebuggerServer.init();
++
++    // When connecting to a local tab, we only need the root actor.
++    // Then we are going to call DebuggerServer.connectToFrame and talk
++    // directly with actors living in the child process.
++    // We also need browser actors for actor registry which enabled addons
++    // to register custom actors.
++    // TODO: the comment and implementation are out of sync here. See Bug 1420134.
++    DebuggerServer.registerAllActors();
++    // Enable being able to get child process actors
++    DebuggerServer.allowChromeProcess = true;
++  },
++
++  /**
++  * Create aDebuggerClient and connect it to this local DebuggerServer
++  */
++  _createLocalClient() {
++    return new DebuggerClient(DebuggerServer.connectPipe());
++  },
+ 
+   /**
+    * Construct a Target. The target will be cached for each Tab so that we create only
+@@ -46,8 +71,6 @@ exports.TargetFactory = {
+    * Instantiate a target for the given tab.
+    *
+    * This will automatically:
+-   * - spawn a DebuggerServer in the parent process,
+-   * - create a DebuggerClient and connect it to this local DebuggerServer,
+    * - call RootActor's `getTab` request to retrieve the FrameTargetActor's form,
+    * - instantiate a Target instance.
+    *
+@@ -57,28 +80,8 @@ exports.TargetFactory = {
+    * @return A target object
+    */
+   async createTargetForTab(tab) {
+-    function createLocalServer() {
+-      // Since a remote protocol connection will be made, let's start the
+-      // DebuggerServer here, once and for all tools.
+-      DebuggerServer.init();
+-
+-      // When connecting to a local tab, we only need the root actor.
+-      // Then we are going to call DebuggerServer.connectToFrame and talk
+-      // directly with actors living in the child process.
+-      // We also need browser actors for actor registry which enabled addons
+-      // to register custom actors.
+-      // TODO: the comment and implementation are out of sync here. See Bug 1420134.
+-      DebuggerServer.registerAllActors();
+-      // Enable being able to get child process actors
+-      DebuggerServer.allowChromeProcess = true;
+-    }
+-
+-    function createLocalClient() {
+-      return new DebuggerClient(DebuggerServer.connectPipe());
+-    }
+-
+-    createLocalServer();
+-    const client = createLocalClient();
++    this._createLocalServer();
++    const client = this._createLocalClient();
+ 
+     // Connect the local client to the local server
+     await client.connect();
+@@ -97,4 +100,55 @@ exports.TargetFactory = {
+   isKnownTab: function(tab) {
+     return targets.has(tab);
+   },
++
++  /**
++   * Construct a Target. The target will be cached for each addon so that we create only
++   * one per addon.
++   *
++   * @param {Object} addon
++   *        An addon object with a single 'id' key corresponding to the addon id. We use an object
++   *        here instead of a string to make use of the same `targets` WeakMap used by tab targets.
++   *
++   * @return A target object
++   */
++  forAddon: async function(addon) {
++    let target = targets.get(addon);
++    if (target) {
++      return target;
++    }
++    const promise = this.createTargetForAddon(addon);
++    // Immediately set the target's promise in cache to prevent race
++    targets.set(addon, promise);
++    target = await promise;
++    // Then replace the promise with the target object
++    targets.set(addon, target);
++    target.once("close", () => {
++      targets.delete(addon);
++    });
++    return target;
++  },
++
++  /**
++   * Instantiate a target for the given addon.
++   *
++   * This will automatically:
++   * - call RootActor's `getAddon` request to retrieve the WebExtension target actor's form,
++   * - instantiate a Target instance.
++   *
++   * @param {Object} addon
++   *        An addon object with a single 'id' key corresponding to the addon id.
++   *
++   * @return A target object
++   */
++  async createTargetForAddon(addon) {
++    this._createLocalServer();
++    const client = this._createLocalClient();
++
++    // Connect the local client to the local server
++    await client.connect();
++
++    // Fetch the WebExtensionActor's target
++    const front = await client.mainRoot.getAddon(addon);
++    return front.connect();
++  },
+ };
+diff --git a/devtools/client/shared/vendor/moz.build b/devtools/client/shared/vendor/moz.build
+--- a/devtools/client/shared/vendor/moz.build
++++ b/devtools/client/shared/vendor/moz.build
+@@ -4,15 +4,10 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+-DIRS += [
+-    'stringvalidator',
+-]
+-
+ DevToolsModules(
+     'fluent-react.js',
+     'fluent.js',
+     'immutable.js',
+-    'jsol.js',
+     'jszip.js',
+     'lodash.js',
+     'react-dom-factories.js',
+diff --git a/devtools/client/shared/widgets/TableWidget.js b/devtools/client/shared/widgets/TableWidget.js
+--- a/devtools/client/shared/widgets/TableWidget.js
++++ b/devtools/client/shared/widgets/TableWidget.js
+@@ -592,13 +592,17 @@ TableWidget.prototype = {
+ 
+     if (this._editableFieldsEngine) {
+       this._editableFieldsEngine.selectors = selectors;
++      this._editableFieldsEngine.items = this.items;
+     } else {
+-      this._editableFieldsEngine = new EditableFieldsEngine({
+-        root: this.tbody,
+-        onTab: this.onEditorTab,
+-        onTriggerEvent: "dblclick",
+-        selectors: selectors,
+-      });
++      this._editableFieldsEngine = new EditableFieldsEngine(
++        {
++          root: this.tbody,
++          onTab: this.onEditorTab,
++          onTriggerEvent: "dblclick",
++          selectors: selectors,
++          items: this.items,
++        },
++      );
+ 
+       this._editableFieldsEngine.on("change", this.onChange);
+       this._editableFieldsEngine.on("destroyed", this.onEditorDestroyed);
+@@ -1716,6 +1720,7 @@ function EditableFieldsEngine(options) {
+   this.selectors = options.selectors;
+   this.onTab = options.onTab;
+   this.onTriggerEvent = options.onTriggerEvent || "dblclick";
++  this.items = options.items;
+ 
+   this.edit = this.edit.bind(this);
+   this.cancelEdit = this.cancelEdit.bind(this);
+@@ -1804,6 +1809,15 @@ EditableFieldsEngine.prototype = {
+       return;
+     }
+ 
++    // Some item values are not parsable by the client or server so should not be
++    // editable. Cells corresponding to item names could still be edited though.
++    const name = target.getAttribute("data-id");
++    const value = target.getAttribute("value");
++    const item = this.items.get(name);
++    if (name !== value && "editable" in item && !item.editable) {
++      return;
++    }
++
+     target.scrollIntoView(false);
+     target.focus();
+ 
+diff --git a/devtools/client/storage/test/browser.ini b/devtools/client/storage/test/browser.ini
+--- a/devtools/client/storage/test/browser.ini
++++ b/devtools/client/storage/test/browser.ini
+@@ -75,3 +75,4 @@ tags = usercontextid
+ [browser_storage_sidebar_toggle.js]
+ [browser_storage_sidebar_update.js]
+ [browser_storage_values.js]
++[browser_storage_webext_storage_local.js]
+diff --git a/devtools/client/storage/test/browser_storage_webext_storage_local.js b/devtools/client/storage/test/browser_storage_webext_storage_local.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/storage/test/browser_storage_webext_storage_local.js
+@@ -0,0 +1,146 @@
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++http://creativecommons.org/publicdomain/zero/1.0/ */
++
++/* globals browser BigInt */
++
++"use strict";
++
++const {Toolbox} = require("devtools/client/framework/toolbox");
++
++/**
++* Set up and optionally open the `about:debugging` toolbox for a given extension.
++* @param {String} extensionId - The id for the extension to be targeted by the toolbox.
++* @param {Object} options - Configuration options with various optional fields:
++*   - {Boolean} openToolbox - If true, open the toolbox
++* @return {Promise} Resolves with a web extension actor target object and the toolbox
++* and storage objects when the toolbox has been setup
++*/
++async function setupExtensionDebuggingToolbox(id, options = {}) {
++  const {openToolbox = false} = options;
++
++  const target = await TargetFactory.forAddon({id});
++
++  let toolbox;
++  let storage;
++  if (openToolbox) {
++    const res = await openStoragePanel(null, target, Toolbox.HostType.WINDOW);
++    [toolbox, storage] = [res.toolbox, res.storage];
++  }
++
++  return {target, toolbox, storage};
++}
++
++// Pref remains in effect until test completes and is automatically cleared afterwards
++add_task(async function set_enable_extensionStorage_pref() {
++  await SpecialPowers.pushPrefEnv({
++    set: [["devtools.storage.extensionStorage.enabled", true]],
++  });
++});
++
++/**
++* Since storage item values are represented in the client as strings in textboxes, not all
++* JavaScript object types supported by the WE storage local API and its IndexedDB backend
++* can be successfully stringified for display in the table much less parsed correctly when
++* the user tries to edit a value in the panel. This test is expected to change over time
++* as more and more value types are supported.
++*/
++add_task(async function test_extension_toolbox_only_supported_values_editable() {
++  async function background() {
++    browser.test.onMessage.addListener(async (msg, ...args) => {
++      switch (msg) {
++        case "storage-local-set":
++          await browser.storage.local.set(args[0]);
++          break;
++        case "storage-local-get":
++          const items = await browser.storage.local.get(args[0]);
++          for (const [key, val] of Object.entries(items)) {
++            browser.test.assertTrue(
++              val === args[1],
++              `New value ${val} is set for key ${key}.`,
++            );
++          }
++
++          break;
++        default:
++          browser.test.fail(`Unexpected test message: ${msg}`);
++      }
++
++      browser.test.sendMessage(`${msg}:done`);
++    });
++    browser.test.sendMessage("extension-origin", window.location.origin);
++  }
++  const extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      permissions: ["storage"],
++    },
++    background,
++    useAddonManager: "temporary",
++  });
++
++  await extension.startup();
++
++  const host = await extension.awaitMessage("extension-origin");
++
++  const itemsSupported = {
++    arr: [1, 2],
++    bool: true,
++    null: null,
++    num: 4,
++    obj: {a: 123},
++    str: "hi",
++  };
++
++  const itemsUnsupported = {
++    arrBuffer: new ArrayBuffer(8),
++    bigint: BigInt(1),
++    date: new Date(0),
++    map: (new Map()).set("a", "b"),
++    regexp: /regexp/,
++    "set": (new Set()).add(1).add("a"),
++    undef: undefined,
++  };
++
++  extension.sendMessage("storage-local-set", {...itemsSupported, ...itemsUnsupported});
++  await extension.awaitMessage("storage-local-set:done");
++
++  const {target} = await setupExtensionDebuggingToolbox(
++    extension.id,
++    {openToolbox: true},
++  );
++
++  await selectTreeItem(["extensionStorage", host]);
++
++  info("Verify that value types supported by the storage actor are editable");
++  let validate = true;
++  const newValue = "anotherValue";
++  const supportedIds = Object.keys(itemsSupported);
++  for (const id of supportedIds) {
++    await editCell(id, "value", newValue, validate);
++  }
++
++  info("Verify that associated values have been changed in the extension");
++  extension.sendMessage("storage-local-get", Object.keys(itemsSupported), newValue);
++  await extension.awaitMessage("storage-local-get:done");
++
++  info("Verify that value types not supported by the storage actor are uneditable");
++  const expectedValStrings = {
++    arrBuffer: "[object ArrayBuffer]",
++    bigint: "[value bigint]",
++    date: "[object Date]",
++    map: "[object Map]",
++    regexp: "[object RegExp]",
++    "set": "[object Set]",
++    undef: "[value undefined]",
++  };
++  validate = false;
++  for (const id of Object.keys(itemsUnsupported)) {
++    await startCellEdit(id, "value", false);
++    checkCellUneditable(id, "value");
++    checkCell(id, "value", expectedValStrings[id]);
++  }
++
++  await gDevTools.closeToolbox(target);
++  await extension.unload();
++  await target.destroy();
++});
+diff --git a/devtools/client/storage/test/head.js b/devtools/client/storage/test/head.js
+--- a/devtools/client/storage/test/head.js
++++ b/devtools/client/storage/test/head.js
+@@ -130,12 +130,16 @@ async function openTabAndSetupStorage(ur
+  *
+  * @param cb {Function} Optional callback, if you don't want to use the returned
+  *                      promise
++ * @param target {Object} Optional, the target for the toolbox; defaults to a tab target
++ * @param hostType {Toolbox.HostType} Optional, type of host that will host the toolbox
+  *
+  * @return {Promise} a promise that resolves when the storage inspector is ready
+  */
+-var openStoragePanel = async function(cb) {
++var openStoragePanel = async function(cb, target, hostType) {
+   info("Opening the storage inspector");
+-  const target = await TargetFactory.forTab(gBrowser.selectedTab);
++  if (!target) {
++    target = await TargetFactory.forTab(gBrowser.selectedTab);
++  }
+ 
+   let storage, toolbox;
+ 
+@@ -162,7 +166,7 @@ var openStoragePanel = async function(cb
+   }
+ 
+   info("Opening the toolbox");
+-  toolbox = await gDevTools.showToolbox(target, "storage");
++  toolbox = await gDevTools.showToolbox(target, "storage", hostType);
+   storage = toolbox.getPanel("storage");
+   gPanelWindow = storage.panelWindow;
+   gUI = storage.UI;
+@@ -172,8 +176,21 @@ var openStoragePanel = async function(cb
+   // so we disable it
+   gUI.animationsEnabled = false;
+ 
+-  info("Waiting for the stores to update");
+-  await gUI.once("store-objects-updated");
++  if (target.isWebExtension) {
++    // Unlike the other storage actors, "extensionStorage" calls this.storageActor.update
++    // in its populateStoresForHost method, so that the extension host is listed even
++    // when there is no extension page currently open.
++    info("Waiting for extensionStorage to 'update' after opening toolbox");
++    info("Waiting for the stores to update");
++    // We can't guarantee the order in which these two events fire
++    await Promise.all([
++      gUI.once("store-objects-edit"),
++      gUI.once("store-objects-updated"),
++    ]);
++  } else {
++    info("Waiting for the stores to update");
++    await gUI.once("store-objects-updated");
++  }
+ 
+   await waitForToolboxFrameFocus(toolbox);
+ 
+@@ -768,6 +785,26 @@ function checkCell(id, column, expected)
+ }
+ 
+ /**
++ * Check that a cell is not in edit mode.
++ *
++ * @param {String} id
++ *        The uniqueId of the row.
++ * @param {String} column
++ *        The id of the column
++ */
++function checkCellUneditable(id, column) {
++  const row = getRowCells(id, true);
++  const cell = row[column];
++
++  const editableFieldsEngine = gUI.table._editableFieldsEngine;
++  const textbox = editableFieldsEngine.textbox;
++
++  // When a field is being edited, the cell is hidden, and the textbox is made visible.
++  ok(!cell.hidden && textbox.hidden,
++     `The cell located in column ${column} and row ${id} is not editable.`);
++}
++
++/**
+  * Show or hide a column.
+  *
+  * @param  {String} id
+@@ -837,10 +874,10 @@ async function typeWithTerminator(str, t
+   }
+ 
+   info("Typing " + str);
+-  EventUtils.sendString(str);
++  EventUtils.sendString(str, gPanelWindow);
+ 
+   info("Pressing " + terminator);
+-  EventUtils.synthesizeKey(terminator);
++  EventUtils.synthesizeKey(terminator, null, gPanelWindow);
+ 
+   if (validate) {
+     info("Validating results... waiting for ROW_EDIT event.");
+diff --git a/devtools/client/storage/ui.js b/devtools/client/storage/ui.js
+--- a/devtools/client/storage/ui.js
++++ b/devtools/client/storage/ui.js
+@@ -8,7 +8,7 @@
+ const EventEmitter = require("devtools/shared/event-emitter");
+ const {LocalizationHelper, ELLIPSIS} = require("devtools/shared/l10n");
+ const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
+-const JSOL = require("devtools/client/shared/vendor/jsol");
++const {parseItemValue} = require("devtools/shared/storage/utils");
+ const {KeyCodes} = require("devtools/client/shared/keycodes");
+ const { getUnicodeHostname } = require("devtools/client/shared/unicode-url");
+ 
+@@ -24,8 +24,6 @@ loader.lazyRequireGetter(this, "TableWid
+                          "devtools/client/shared/widgets/TableWidget", true);
+ loader.lazyImporter(this, "VariablesView",
+                     "resource://devtools/client/shared/widgets/VariablesView.jsm");
+-loader.lazyRequireGetter(this, "validator",
+-                         "devtools/client/shared/vendor/stringvalidator/validator");
+ 
+ /**
+  * Localization convenience methods.
+@@ -63,7 +61,6 @@ const COOKIE_KEY_MAP = {
+ };
+ 
+ const SAFE_HOSTS_PREFIXES_REGEX = /^(about:|https?:|file:|moz-extension:)/;
+-const MATH_REGEX = /(?:(?:^|[-+_*/])(?:\s*-?\d+(\.\d+)?(?:[eE][+-]?\d+)?\s*))+$/;
+ 
+ // Maximum length of item name to show in context menu label - will be
+ // trimmed with ellipsis if it's longer.
+@@ -721,6 +718,7 @@ class StorageUI {
+    * Populates the selected entry from the table in the sidebar for a more
+    * detailed view.
+    */
++   /* eslint-disable complexity */
+   async updateObjectSidebar() {
+     const item = this.table.selectedRow;
+     let value;
+@@ -757,7 +755,10 @@ class StorageUI {
+       itemVar.setGrip(value);
+ 
+       // May be the item value is a json or a key value pair itself
+-      this.parseItemValue(item.name, value);
++      const obj = parseItemValue(value);
++      if (typeof obj === "object") {
++        this.populateSidebar(item.name, obj);
++      }
+ 
+       // By default the item name and value are shown. If this is the only
+       // information available, then nothing else is to be displayed.
+@@ -790,12 +791,16 @@ class StorageUI {
+         }
+ 
+         mainScope.addItem(key, {}, true).setGrip(item[key]);
+-        this.parseItemValue(key, item[key]);
++        const obj = parseItemValue(item[key]);
++        if (typeof obj === "object") {
++          this.populateSidebar(item.name, obj);
++        }
+       }
+     }
+ 
+     this.emit("sidebar-updated");
+   }
++  /* eslint-enable complexity */
+ 
+   /**
+    * Gets a readable label from the hostname. If the hostname is a Punycode
+@@ -826,47 +831,13 @@ class StorageUI {
+     return host;
+   }
+ 
+-  /**
+-   * Tries to parse a string value into either a json or a key-value separated
+-   * object and populates the sidebar with the parsed value. The value can also
+-   * be a key separated array.
++  /*
++   * Populates the sidebar with a parsed object.
+    *
+-   * @param {string} name
+-   *        The key corresponding to the `value` string in the object
+-   * @param {string} originalValue
+-   *        The string to be parsed into an object
++   * @param {object} obj - Either a json or a key-value separated object or a
++   * key separated array
+    */
+-  parseItemValue(name, originalValue) {
+-    // Find if value is URLEncoded ie
+-    let decodedValue = "";
+-    try {
+-      decodedValue = decodeURIComponent(originalValue);
+-    } catch (e) {
+-      // Unable to decode, nothing to do
+-    }
+-    const value = (decodedValue && decodedValue !== originalValue)
+-      ? decodedValue : originalValue;
+-
+-    if (!this._shouldParse(value)) {
+-      return;
+-    }
+-
+-    let obj = null;
+-    try {
+-      obj = JSOL.parse(value);
+-    } catch (ex) {
+-      obj = null;
+-    }
+-
+-    if (!obj && value) {
+-      obj = this._extractKeyValPairs(value);
+-    }
+-
+-    // return if obj is null, or same as value, or just a string.
+-    if (!obj || obj === value || typeof obj === "string") {
+-      return;
+-    }
+-
++  populateSidebar(name, obj) {
+     const jsonObject = Object.create(null);
+     const view = this.view;
+     jsonObject[name] = obj;
+@@ -880,97 +851,6 @@ class StorageUI {
+   }
+ 
+   /**
+-   * Tries to parse a string into an object on the basis of key-value pairs,
+-   * separated by various separators. If failed, tries to parse for single
+-   * separator separated values to form an array.
+-   *
+-   * @param {string} value
+-   *        The string to be parsed into an object or array
+-   */
+-  _extractKeyValPairs(value) {
+-    const makeObject = (keySep, pairSep) => {
+-      const object = {};
+-      for (const pair of value.split(pairSep)) {
+-        const [key, val] = pair.split(keySep);
+-        object[key] = val;
+-      }
+-      return object;
+-    };
+-
+-    // Possible separators.
+-    const separators = ["=", ":", "~", "#", "&", "\\*", ",", "\\."];
+-    // Testing for object
+-    for (let i = 0; i < separators.length; i++) {
+-      const kv = separators[i];
+-      for (let j = 0; j < separators.length; j++) {
+-        if (i == j) {
+-          continue;
+-        }
+-        const p = separators[j];
+-        const word = `[^${kv}${p}]*`;
+-        const keyValue = `${word}${kv}${word}`;
+-        const keyValueList = `${keyValue}(${p}${keyValue})*`;
+-        const regex = new RegExp(`^${keyValueList}$`);
+-        if (value.match && value.match(regex) && value.includes(kv) &&
+-            (value.includes(p) || value.split(kv).length == 2)) {
+-          return makeObject(kv, p);
+-        }
+-      }
+-    }
+-    // Testing for array
+-    for (const p of separators) {
+-      const word = `[^${p}]*`;
+-      const wordList = `(${word}${p})+${word}`;
+-      const regex = new RegExp(`^${wordList}$`);
+-
+-      if (regex.test(value)) {
+-        const pNoBackslash = p.replace(/\\*/g, "");
+-        return value.split(pNoBackslash);
+-      }
+-    }
+-    return null;
+-  }
+-
+-  /**
+-   * Check whether the value string represents something that should be
+-   * displayed as text. If so then it shouldn't be parsed into a tree.
+-   *
+-   * @param  {String} value
+-   *         The value to be parsed.
+-   */
+-  _shouldParse(value) {
+-    const validators = [
+-      "isBase64",
+-      "isBoolean",
+-      "isCurrency",
+-      "isDataURI",
+-      "isEmail",
+-      "isFQDN",
+-      "isHexColor",
+-      "isIP",
+-      "isISO8601",
+-      "isMACAddress",
+-      "isSemVer",
+-      "isURL",
+-    ];
+-
+-    // Check for minus calculations e.g. 8-3 because otherwise 5 will be displayed.
+-    if (MATH_REGEX.test(value)) {
+-      return false;
+-    }
+-
+-    // Check for any other types that shouldn't be parsed.
+-    for (const test of validators) {
+-      if (validator[test](value)) {
+-        return false;
+-      }
+-    }
+-
+-    // Seems like this is data that should be parsed.
+-    return true;
+-  }
+-
+-  /**
+    * Select handler for the storage tree. Fetches details of the selected item
+    * from the storage details and populates the storage tree.
+    *
+diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.js
+--- a/devtools/server/actors/storage.js
++++ b/devtools/server/actors/storage.js
+@@ -12,10 +12,13 @@ const Services = require("Services");
+ const defer = require("devtools/shared/defer");
+ const {isWindowIncluded} = require("devtools/shared/layout/utils");
+ const specs = require("devtools/shared/specs/storage");
++const {parseItemValue} = require("devtools/shared/storage/utils");
+ const {ExtensionProcessScript} = require("resource://gre/modules/ExtensionProcessScript.jsm");
+ const {ExtensionStorageIDB} = require("resource://gre/modules/ExtensionStorageIDB.jsm");
+ const {WebExtensionPolicy} = Cu.getGlobalForObject(require("resource://gre/modules/XPCOMUtils.jsm"));
+ 
++const lodash = require("devtools/client/shared/vendor/lodash");
++
+ const CHROME_ENABLED_PREF = "devtools.chrome.enabled";
+ const REMOTE_ENABLED_PREF = "devtools.debugger.remote-enabled";
+ const EXTENSION_STORAGE_ENABLED_PREF = "devtools.storage.extensionStorage.enabled";
+@@ -1309,6 +1312,112 @@ StorageActors.createActor({
+ const extensionStorageHelpers = {
+   unresolvedPromises: new Map(),
+   onChangedListeners: new Map(),
++  typesFromString: { // Helper methods to parse string values in editItem
++    jsonifiable: {
++      test(str) {
++        try {
++          JSON.parse(str);
++        } catch (e) {
++          return false;
++        }
++        return true;
++      },
++      parse(str) {
++        return JSON.parse(str);
++      },
++    },
++  },
++  supportedTypes: { // Helper methods to determine the value type of an item in isEditable
++    array: {
++      test(value) {
++        return Array.isArray(value);
++      },
++    },
++    boolean: {
++      test(value) {
++        return typeof value === "boolean";
++      },
++    },
++    null: {
++      test(value) {
++        return value === null;
++      },
++    },
++    number: {
++      test(value) {
++        return typeof value === "number";
++      },
++    },
++    object: {
++      test(value) {
++        return lodash.isPlainObject(value);
++      },
++    },
++    string: {
++      test(value) {
++        return typeof value === "string";
++      },
++    },
++  },
++  unsupportedTypes: { // Used to display a string in the client in toStoreObject
++    arrayBuffer: {
++      test(value) {
++        return lodash.isArrayBuffer(value);
++      },
++      stringify(value) {
++        return "[object ArrayBuffer]";
++      },
++    },
++    bigint: {
++      test(value) {
++        // eslint-disable-next-line
++        return typeof value === "bigint";
++      },
++      stringify(value) {
++        return "[value bigint]";
++      },
++    },
++    date: {
++      test(value) {
++        return lodash.isDate(value);
++      },
++      stringify(value) {
++        return "[object Date]";
++      },
++    },
++    map: {
++      test(value) {
++        return lodash.isMap(value);
++      },
++      stringify(value) {
++        return "[object Map]";
++      },
++    },
++    "set": {
++      test(value) {
++        return lodash.isSet(value);
++      },
++      stringify(value) {
++        return "[object Set]";
++      },
++    },
++    regexp: {
++      test(value) {
++        return lodash.isRegExp(value);
++      },
++      stringify(value) {
++        return "[object RegExp]";
++      },
++    },
++    undefined: {
++      test(value) {
++        return typeof value === "undefined";
++      },
++      stringify(value) {
++        return "[value undefined]";
++      },
++    },
++  },
+ 
+   // Sets the parent process message manager
+   setPpmm(ppmm) {
+@@ -1665,20 +1774,21 @@ if (Services.prefs.getBoolPref(EXTENSION
+       const {name, value} = item;
+ 
+       let newValue;
++      const editable = this.isEditable(value);
+       if (typeof value === "string") {
+         newValue = value;
++      } else if (editable) {
++        newValue = JSON.stringify(value);
+       } else {
+-        try {
+-          newValue = JSON.stringify(value) || String(value);
+-        } catch (error) {
+-          // throws for bigint
+-          newValue = String(value);
+-        }
+-
+-        // JavaScript objects that are not JSON stringifiable will be represented
+-        // by the string "Object"
+-        if (newValue === "{}") {
+-          newValue = "Object";
++        // We don't cover every possible unsupported JS object explicitly, so assign
++        // this as a failsafe.
++        newValue = "[value uneditable]";
++        const {unsupportedTypes} = extensionStorageHelpers;
++        for (const {test, stringify} of Object.values(unsupportedTypes)) {
++          if (test(value)) {
++            newValue = stringify(value);
++            break;
++          }
+         }
+       }
+ 
+@@ -1695,16 +1805,103 @@ if (Services.prefs.getBoolPref(EXTENSION
+         name,
+         value: new LongStringActor(this.conn, newValue || ""),
+         area: "local", // Bug 1542038, 1542039: set the correct storage area
++        editable,
+       };
+     },
+ 
+     getFields() {
+       return [
+-        { name: "name", editable: false },
+-        { name: "value", editable: false },
++        { name: "name", editable: true },
++        { name: "value", editable: true },
+         { name: "area", editable: false },
+       ];
+     },
 +
 +    /**
 +    * Editing is supported only for serializable value types. Examples of unserializable
@@ -1308,900 +2394,372 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      Services.cpmm.sendAsyncMessage(`Extension:StorageLocalOnChanged:${uuid}`,
 +                                     changes);
 +    },
-+  });
-+}
-+
- StorageActors.createActor({
-   typeName: "Cache",
- }, {
-@@ -2690,9 +3300,12 @@ const StorageActor = protocol.ActorClass
-         (!subject.location.href || subject.location.href == "about:blank")) {
-       return null;
-     }
--
--    if (topic == "content-document-global-created" &&
--        this.isIncludedInTopLevelWindow(subject)) {
-+    // We don't want to try to find a top level window for an extension page, as
-+    // in many cases (e.g. background page), it is not loaded in a tab, and
-+    // 'isIncludedInTopLevelWindow' throws an error
-+    if (topic == "content-document-global-created"
-+      && (subject.location.href.startsWith("moz-extension://")
-+      || this.isIncludedInTopLevelWindow(subject))) {
-       this.childWindowPool.add(subject);
-       this.emit("window-ready", subject);
-     } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3360,11 @@ const StorageActor = protocol.ActorClass
-     const toReturn = {};
+   });
+ }
  
-     for (const [name, value] of this.childActorPool) {
-+      // Only list extensionStorage for the add-on storage panel
-+      if (name === "extensionStorage"
-+        && (!value.storageActor.parentActor.addonId)) {
-+        continue;
-+      }
-       if (value.preListStores) {
-         await value.preListStores();
-       }
-diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
---- a/devtools/server/tests/browser/browser.ini
-+++ b/devtools/server/tests/browser/browser.ini
-@@ -127,6 +127,7 @@ skip-if = e10s # Bug 1183605 - devtools/
- [browser_storage_listings.js]
- [browser_storage_updates.js]
- skip-if = (verify && debug && (os == 'mac' || os == 'linux')) || (os == 'win' && debug) # Bug 1493369
-+[browser_storage_webext_storage_local.js]
- [browser_stylesheets_getTextEmpty.js]
- [browser_stylesheets_nested-iframes.js]
- [browser_register_actor.js]
-diff --git a/devtools/server/tests/browser/browser_storage_webext_storage_local.js b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-new file mode 100644
---- /dev/null
-+++ b/devtools/server/tests/browser/browser_storage_webext_storage_local.js
-@@ -0,0 +1,34 @@
-+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* Any copyright is dedicated to the Public Domain.
-+http://creativecommons.org/publicdomain/zero/1.0/ */
-+
-+"use strict";
-+
-+// Pref remains in effect until test completes and is automatically cleared afterwards
-+add_task(async function set_enable_extensionStorage_pref() {
-+  await SpecialPowers.pushPrefEnv({
-+    set: [["devtools.storage.extensionStorage.enabled", true]],
-+  });
-+});
-+
-+add_task(async function test_extension_store_disabled_for_non_extension_target_process() {
-+  info("Setting up and connecting Debugger Server and Client in main process");
-+  initDebuggerServer();
-+  const transport = DebuggerServer.connectPipe();
-+  const client = new DebuggerClient(transport);
-+  await client.connect();
-+
-+  info("Opening a non-extension page in a tab");
-+  const target = await addTabTarget("data:text/html;charset=utf-8,");
-+
-+  info("Getting all stores for the target process");
-+  const storageFront = await target.getFront("storage");
-+  const stores = await storageFront.listStores();
-+
-+  ok(
-+    !("extensionStorage" in stores),
-+    "Should not have an extensionStorage store when non-extension process is targeted"
-+  );
-+
-+  target.destroy();
-+});
 diff --git a/devtools/server/tests/unit/test_extension_storage_actor.js b/devtools/server/tests/unit/test_extension_storage_actor.js
-new file mode 100644
---- /dev/null
+--- a/devtools/server/tests/unit/test_extension_storage_actor.js
 +++ b/devtools/server/tests/unit/test_extension_storage_actor.js
-@@ -0,0 +1,794 @@
-+/* Any copyright is dedicated to the Public Domain.
-+   http://creativecommons.org/publicdomain/zero/1.0/ */
-+
-+/* globals browser */
-+
-+"use strict";
-+
-+const {
-+  AddonTestUtils,
-+} = ChromeUtils.import("resource://testing-common/AddonTestUtils.jsm");
-+
-+const {
-+  FileUtils,
-+} = ChromeUtils.import("resource://gre/modules/FileUtils.jsm");
-+
-+const {
-+  ExtensionTestUtils,
-+} = ChromeUtils.import("resource://testing-common/ExtensionXPCShellUtils.jsm");
-+
-+const {
-+  createAppInfo,
-+  promiseStartupManager,
-+} = AddonTestUtils;
-+
-+const LEAVE_UUID_PREF = "extensions.webextensions.keepUuidOnUninstall";
-+const LEAVE_STORAGE_PREF = "extensions.webextensions.keepStorageOnUninstall";
-+const EXTENSION_STORAGE_ENABLED_PREF = "devtools.storage.extensionStorage.enabled";
-+
-+AddonTestUtils.init(this);
-+createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
-+
-+ExtensionTestUtils.init(this);
-+
-+// This storage actor is gated behind a pref, so make sure it is enabled first
-+Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, true);
-+registerCleanupFunction(() => {
-+  Services.prefs.clearUserPref(EXTENSION_STORAGE_ENABLED_PREF);
-+});
-+
-+/**
-+* Starts up and connects the Debugger server to the DevTools client (both in the main
-+* process) by listening over an nsIPipe, so that they can send remote debugging
-+* protocol messages to each other.
-+* @return {Promise} Resolves with a client object when the debugger has started up.
-+*/
-+async function startDebugger() {
-+  DebuggerServer.init();
-+  DebuggerServer.registerAllActors();
-+  const transport = DebuggerServer.connectPipe();
-+  const client = new DebuggerClient(transport);
-+  await client.connect();
-+  return client;
-+}
-+
-+/**
-+* Set up the `about:debugging` toolbox for a given extension.
-+* @param {String} extensionId - The id for the extension to be targeted by the toolbox.
-+* @return {Promise} Resolves with a web extension actor front and target objects when
-+* the toolbox has been setup
-+*/
-+async function setupExtensionDebugging(extensionId) {
-+  const client = await startDebugger();
-+  const front = await client.mainRoot.getAddon({id: extensionId});
-+  // Starts a DevTools server in the extension child process.
-+  const target = await front.connect(); // JSON representation of the actor
-+  return {front, target};
-+}
-+
-+/**
-+* Builds the extension configuration object passed into ExtensionTestUtils.loadExtension
-+* @param {Object} - Options, if any, to add to the configuration
-+* @param {Function} options.background - A function comprising the test extension's
-+* background script if provided
-+* @param {Object} options.files - An object whose keys correspond to file names and
-+* values map to the file contents
-+* @param {Object} options.manifest - An object representing the extension's manifest
-+* @return {Object} - The extension configuration object
-+*/
-+function getExtensionConfig(options = {}) {
-+  const {manifest, ...otherOptions} = options;
-+  const baseConfig = {
-+    manifest: {
-+      ...manifest,
-+      permissions: ["storage"],
-+    },
-+    useAddonManager: "temporary",
-+  };
-+  return {
-+    ...baseConfig,
-+    ...otherOptions,
-+  };
-+}
-+
-+/**
-+* Gets the extensionStorage store object from the storage actor in the extension process
-+* for the target extension
-+* @param {Object} target
-+* @return {Promise} Resolves with an extensionStorage store object else null when all
-+* stores have been obtained
-+*/
-+async function getExtensionStorage(target) {
-+  const storageFront = await target.getFront("storage");
-+  const stores = await storageFront.listStores();
-+  return (stores.extensionStorage || null);
-+}
-+
-+/**
-+* Shutdown procedure common to all tasks.
-+* @param {Object} extension - The test extension
-+* @param {Object} target - The web extension actor targeted by the DevTools client
-+*/
-+async function shutdown(extension, target) {
-+  if (target) {
-+    await target.destroy();
-+  }
-+  await extension.unload();
-+}
-+
-+/**
-+* A generic extension script that can be used in any extension context (e.g. a
-+* background script or an extension page script loaded in a tab).
-+*/
-+async function extensionScriptWithMessageListener() {
-+  let valType;
-+  browser.test.onMessage.addListener(async (msg, ...args) => {
-+    switch (msg) {
-+      case "storage-local-set":
-+        await browser.storage.local.set(args[0]);
-+        const item = args[0];
-+        valType = typeof item[Object.keys(item)[0]];
-+        await browser.storage.local.set(item);
-+        break;
-+      case "storage-local-get":
-+        const {key} = args[0];
-+        valType = args[0].valType || valType;
-+        const value = (await browser.storage.local.get(key))[key];
-+        browser.test.assertTrue(
-+          (typeof value === valType),
-+          "The data type for the storage item's value is unchanged."
-+        );
-+        break;
-+      default:
-+        browser.test.fail(`Unexpected test message: ${msg}`);
-+    }
-+
-+    browser.test.sendMessage(`${msg}:done`);
-+  });
-+  browser.test.sendMessage("extension-origin", window.location.origin);
-+}
-+
-+/**
-+* Shared files for a test extension that has no background page but adds storage
-+* items via a transient extension page in a tab
-+*/
-+const ext_no_bg = {
-+  files: {
-+    "extension_page_in_tab.html": `<!DOCTYPE html>
-+      <html>
-+        <head>
-+          <meta charset="utf-8">
-+        </head>
-+        <body>
-+          <h1>Extension Page in a Tab</h1>
-+          <script src="extension_page_in_tab.js"></script>
-+        </body>
-+      </html>`,
-+    "extension_page_in_tab.js": extensionScriptWithMessageListener,
-+  },
-+};
-+
-+/**
-+ * Mocks the missing 'storage/permanent' directory needed by the "indexedDB"
-+ * storage actor's preListStores method (called when 'listStores' is called). This
-+ * directory exists in a full browser i.e. mochitest.
-+ */
-+function createMissingIndexedDBDirs() {
-+  const dir = (Services.dirsvc.get("ProfD", Ci.nsIFile)).clone();
-+  dir.append("storage");
-+  if (!dir.exists()) {
-+    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
-+  }
-+  dir.append("permanent");
-+  if (!dir.exists()) {
-+    dir.create(dir.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
-+  }
-+  Assert.ok(dir.exists(), "Should have a 'storage/permanent' dir in the profile dir");
-+}
-+
-+add_task(async function setup() {
-+  await promiseStartupManager();
-+  createMissingIndexedDBDirs();
-+});
-+
-+add_task(async function test_extension_store_exists() {
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
-+
-+  await extension.startup();
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+
-+  const extensionStorage = await getExtensionStorage(target);
-+  ok(extensionStorage, "Should have an extensionStorage store");
-+
-+  await shutdown(extension, target);
-+});
-+
-+add_task(async function test_extension_origin_matches_debugger_target() {
-+  async function background() {
-+    browser.test.sendMessage("extension-origin", window.location.origin);
-+  }
-+
-+  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background})
-+  );
-+
-+  await extension.startup();
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  const {hosts} = await getExtensionStorage(target);
-+  const expectedHost = await extension.awaitMessage("extension-origin");
-+  ok(expectedHost in hosts,
-+     "Should have the expected extension host in the extensionStorage store");
-+
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: Bg page adds item while inspector is open.
-+* - Load extension with background page.
-+* - Open the add-on inspector.
-+* - With the inspector still open, add an item from the background page.
-+* - The data in the inspector should match the item added by the extension.
-+*/
-+add_task(async function test_local_storage_live_update() {
-+  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background: extensionScriptWithMessageListener})
-+  );
-+
-+  await extension.startup();
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  let {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
-+
-+  extension.sendMessage("storage-local-set", {
-+    a: 123,
-+    b: [4, 5],
-+    c: {d: 678},
-+    d: true,
-+    e: "hi",
-+    f: null,
-+  });
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  data = (await extensionStorage.getStoreObjects(host)).data;
-+  Assert.deepEqual(
-+    data, [
+@@ -133,13 +133,13 @@ function getExtensionConfig(options = {}
+ */
+ async function extensionScriptWithMessageListener() {
+   browser.test.onMessage.addListener(async (msg, ...args) => {
+-    let value = null;
++    let item = null;
+     switch (msg) {
+       case "storage-local-set":
+         await browser.storage.local.set(args[0]);
+         break;
+       case "storage-local-get":
+-        value = (await browser.storage.local.get(args[0]))[args[0]];
++        item = (await browser.storage.local.get(args[0]));
+         break;
+       case "storage-local-remove":
+         await browser.storage.local.remove(args[0]);
+@@ -151,7 +151,7 @@ async function extensionScriptWithMessag
+         browser.test.fail(`Unexpected test message: ${msg}`);
+     }
+ 
+-    browser.test.sendMessage(`${msg}:done`, value);
++    browser.test.sendMessage(`${msg}:done`, item);
+   });
+   browser.test.sendMessage("extension-origin", window.location.origin);
+ }
+@@ -289,6 +289,7 @@ add_task(async function test_panel_live_
+       area: "local",
+       name,
+       value: {str: String(value)},
++      editable: true,
+     });
+   }
+   data = (await extensionStorage.getStoreObjects(host)).data;
+@@ -296,12 +297,12 @@ add_task(async function test_panel_live_
+     data,
+     [
+       ...bulkStorageObjects,
+-      {area: "local", name: "a", value: {str: "123"}},
+-      {area: "local", name: "b", value: {str: "[4,5]"}},
+-      {area: "local", name: "c", value: {str: "{\"d\":678}"}},
+-      {area: "local", name: "d", value: {str: "true"}},
+-      {area: "local", name: "e", value: {str: "hi"}},
+-      {area: "local", name: "f", value: {str: "null"}},
 +      {area: "local", name: "a", value: {str: "123"}, editable: true},
 +      {area: "local", name: "b", value: {str: "[4,5]"}, editable: true},
 +      {area: "local", name: "c", value: {str: "{\"d\":678}"}, editable: true},
 +      {area: "local", name: "d", value: {str: "true"}, editable: true},
 +      {area: "local", name: "e", value: {str: "hi"}, editable: true},
 +      {area: "local", name: "f", value: {str: "null"}, editable: true},
-+    ],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: No bg page. Transient page adds item before inspector opened.
-+* - Load extension with no background page.
-+* - Open an extension page in a tab that adds a local storage item.
-+* - With the extension page still open, open the add-on inspector.
-+* - The data in the inspector should match the items added by the extension.
-+*/
-+add_task(async function test_local_storage_ext_no_bg_with_ext_page_open() {
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
-+    files: ext_no_bg.files,
-+  }));
-+
-+  await extension.startup();
-+
-+  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
-+  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  const {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(
-+    data,
+     ],
+     "Got the expected results on populated storage.local"
+   );
+@@ -320,12 +321,12 @@ add_task(async function test_panel_live_
+     data,
+     [
+       ...bulkStorageObjects,
+-      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}},
+-      {area: "local", name: "b", value: {str: "456"}},
+-      {area: "local", name: "c", value: {str: "false"}},
+-      {area: "local", name: "d", value: {str: "true"}},
+-      {area: "local", name: "e", value: {str: "hi"}},
+-      {area: "local", name: "f", value: {str: "null"}},
++      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}, editable: true},
++      {area: "local", name: "b", value: {str: "456"}, editable: true},
++      {area: "local", name: "c", value: {str: "false"}, editable: true},
++      {area: "local", name: "d", value: {str: "true"}, editable: true},
++      {area: "local", name: "e", value: {str: "hi"}, editable: true},
++      {area: "local", name: "f", value: {str: "null"}, editable: true},
+     ],
+     "Got the expected results on populated storage.local"
+   );
+@@ -340,9 +341,9 @@ add_task(async function test_panel_live_
+     data,
+     [
+       ...bulkStorageObjects,
+-      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}},
+-      {area: "local", name: "b", value: {str: "456"}},
+-      {area: "local", name: "c", value: {str: "false"}},
++      {area: "local", name: "a", value: {str: "[\"c\",\"d\"]"}, editable: true},
++      {area: "local", name: "b", value: {str: "456"}, editable: true},
++      {area: "local", name: "c", value: {str: "false"}, editable: true},
+     ],
+     "Got the expected results on populated storage.local"
+   );
+@@ -385,7 +386,7 @@ add_task(async function test_panel_data_
+   const {data} = await extensionStorage.getStoreObjects(host);
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await contentPage.close();
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: No bg page. Transient page adds item, then closes before inspector opened.
-+* - Load extension with no background page.
-+* - Open an extension page in a tab that adds a local storage item.
-+* - Close all extension pages.
-+* - Open the add-on inspector.
-+* - The data in the inspector should match the item added by the extension.
-+*/
-+add_task(async function test_local_storage_ext_no_bg_with_no_ext_page_open() {
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
-+    files: ext_no_bg.files,
-+  }));
-+
-+  await extension.startup();
-+
-+  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
-+  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  await contentPage.close();
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  const {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(
-+    data,
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -419,7 +420,7 @@ add_task(async function test_panel_data_
+   const {data} = await extensionStorage.getStoreObjects(host);
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: No bg page. Inspector live updates when a transient page adds an item.
-+* - Load extension with no background page.
-+* - Open the add-on storage inspector.
-+* - With the inspector still open, open an extension page in a new tab that adds an item.
-+* - Assert:
-+*   - The data in the inspector should live update to match the item added by the
-+*     extension.
-+*   - If an extension page adds the same data again, the data in the inspector should
-+*     not change.
-+*/
-+add_task(async function test_local_storage_ext_no_bg_live_update() {
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
-+    files: ext_no_bg.files,
-+  }));
-+
-+  await extension.startup();
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
-+  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  let {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(data, [], "Got the expected results on empty storage.local");
-+
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  data = (await extensionStorage.getStoreObjects(host)).data;
-+  Assert.deepEqual(
-+    data,
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -432,10 +433,9 @@ add_task(async function test_panel_data_
+ * - Open the add-on storage panel.
+ * - With the storage panel still open, open an extension page in a new tab that adds an
+ *   item.
+-* - Assert:
+-*   - The data in the storage panel should live update to match the item added by the
++* - The data in the storage panel should live update to match the item added by the
+ *     extension.
+-*   - If an extension page adds the same data again, the data in the storage panel should
++* - If an extension page adds the same data again, the data in the storage panel should
+ *     not change.
+ */
+ add_task(async function test_panel_data_live_updates_for_extension_without_bg_page() {
+@@ -457,7 +457,7 @@ add_task(async function test_panel_data_
+   data = (await extensionStorage.getStoreObjects(host)).data;
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  data = (await extensionStorage.getStoreObjects(host)).data;
-+  Assert.deepEqual(
-+    data,
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -467,7 +467,7 @@ add_task(async function test_panel_data_
+   data = (await extensionStorage.getStoreObjects(host)).data;
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "The results are unchanged when an extension page adds duplicate items"
-+  );
-+
-+  await contentPage.close();
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: Bg page adds item while inspector is open. Inspector edits item's value.
+     "The results are unchanged when an extension page adds duplicate items"
+   );
+ 
+@@ -476,6 +476,177 @@ add_task(async function test_panel_data_
+ });
+ 
+ /**
++* Test case: Bg page adds item while storage panel is open. Panel edits item's value.
 +* - Load extension with background page.
-+* - Open the add-on inspector.
-+* - With the inspector still open, add item from the background page.
-+* - Edit the value of the item in the inspector
-+* - Assert:
-+*   - The data in the inspector should match the item added by the extension.
-+*   - The storage actor is not mutating the item value's data type
-+*     when the item's value is edited in the inspector
++* - Open the add-on storage panel.
++* - With the storage panel still open, add item from the background page.
++* - Edit the value of the item in the storage panel
++* - The data in the storage panel should match the item added by the extension.
++* - The storage actor is correctly parsing and setting the string representation of
++*     the value in the storage local database when the item's value is edited in the
++*     storage panel
 +*/
-+add_task(async function test_local_storage_value_data_types_unchanged() {
-+  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background: extensionScriptWithMessageListener})
++add_task(async function test_editing_items_in_panel_parses_supported_values_correctly() {
++  const extension = await startupExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener}),
 +  );
-+
-+  await extension.startup();
 +
 +  const host = await extension.awaitMessage("extension-origin");
 +
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
 +
-+  /*
-+  * Compares the data type for the modified value of a storage item between
-+  * the extension and the inspector.
-+  * @param {Object} item - The storage item to modify
-+  * @param {string} newVal - The new value for the storage item, expressed as a string
-+  * @param {string} valType - The expected result of 'typeof' once newValue is parsed
-+  * in the storage actor
-+  * @param {Boolean} inExtension - True if the item's value should be modified
-+  * by the extension. False if it should be modified by the storage inspector.
-+  * @param {string} parsedVal - Optional - The parsed value obtained in the storage actor.
-+  * This is useful for objects where spaces and escape characters can cause two
-+  * functionally equivalent values to fail a strict equals check.
-+  */
-+  async function verifyItemValueType(item, newVal, valType, inExtension, parsedVal) {
-+    const key = Object.keys(item)[0];
-+    const oldValue = item[key];
++  const oldItem = {a: 123};
++  const key = Object.keys(oldItem)[0];
++  const oldValue = oldItem[key];
++  // A tuple representing information for a new value entered into the panel for oldItem:
++  // [
++  //   value,
++  //   editItem string representation of value,
++  //   toStoreObject string representation of value,
++  // ]
++  const valueInfo = [
++    [true, "true", "true"],
++    ["hi", "hi", "hi"],
++    [456, "456", "456"],
++    [{b: 789}, "{b: 789}", "{\"b\":789}"],
++    [[1, 2, 3], "[1, 2, 3]", "[1,2,3]"],
++    [null, "null", "null"],
++  ];
++  for (const [value, editItemValueStr, toStoreObjectValueStr] of valueInfo) {
++    info("Setting a storage item through the extension");
++    extension.sendMessage("storage-local-set", oldItem);
++    await extension.awaitMessage("storage-local-set:done");
 +
-+    if (inExtension) {
-+      extension.sendMessage("storage-local-set", item);
-+      await extension.awaitMessage("storage-local-set:done");
-+    } else {
-+      await extensionStorage.editItem({
-+        host,
-+        field: "value",
-+        items: {area: "local", name: key, value: newVal},
-+        oldValue,
-+      });
-+    }
++    info("Editing the storage item in the panel with a new value of a different type");
++    // When the user edits an item in the panel, they are entering a string into a
++    // textbox. This string is parsed by the storage actor's editItem method.
++    await extensionStorage.editItem({
++      host,
++      field: "value",
++      items: {name: key, value: editItemValueStr},
++      oldValue,
++    });
 +
++    info("Verifying item in the storage actor matches the item edited in the panel");
 +    const {data} = await extensionStorage.getStoreObjects(host);
 +    Assert.deepEqual(
 +      data,
-+      // The view layer is separate from the database layer; therefore
-+      // while the storage actor does change a copy of the value to be a
-+      // LongStringActor for the view (by way of `toStoreObject`, the
-+      // value's data type in the database is unchanged, as demonstrated
-+      // by the next assertion in the test extension.
-+      [{area: "local", name: key, value: {str: parsedVal || newVal}, editable: true}],
++      [{area: "local", name: key, value: {str: toStoreObjectValueStr}, editable: true}],
 +      "Got the expected results on populated storage.local"
 +    );
 +
-+    // The extension asserts the data type is unchanged
-+    extension.sendMessage("storage-local-get", {key, valType});
-+    await extension.awaitMessage("storage-local-get:done");
++    // The view layer is separate from the database layer; therefore while values are
++    // stringified (via toStoreObject) for display in the client, the value (and its type)
++    // in the database is unchanged.
++    info("Verifying the expected new value matches the value fetched in the extension");
++    extension.sendMessage("storage-local-get", key);
++    const extItem = await extension.awaitMessage("storage-local-get:done");
++    Assert.deepEqual(
++      value,
++      extItem[key],
++      `The string value ${editItemValueStr} was correctly parsed to ${value}`
++    );
 +  }
-+
-+  await verifyItemValueType({a: 123}, "123", "number", true);
-+
-+  await verifyItemValueType({a: 123}, "true", "boolean", false);
-+
-+  await verifyItemValueType({a: 123}, "hi", "string", false);
-+
-+  await verifyItemValueType({a: 123}, "{b: 789}", "object", false, "{\"b\":789}");
-+
-+  await verifyItemValueType({a: 123}, "[1, 2, 3]", "object", false, "[1,2,3]");
-+
-+  await verifyItemValueType({a: 123}, "null", "object", false);
 +
 +  await shutdown(extension, target);
 +});
 +
 +/**
-+* Test case: Inspector shows extension storage data added prior to extension startup
-+* - Load extension that adds a storage item
-+* - Uninstall the extension
-+* - Reinstall the extension
-+* - Open the add-on storage inspector.
-+* - The data in the inspector should match the data added the first time the extension
-+*   was installed
-+* Related test case: Inspector shows extension storage data when an extension that has
-+* already migrated to the IndexedDB storage backend prior to extension startup adds
-+* another storage item.
-+* - (Building from previous steps)
-+* - The reinstalled extension adds a storage item
-+* - The data in the inspector should live update with both items: the item added from the
-+*   first and the item added from the reinstall.
++* Test case: Modifying storage items from the panel update extension storage local data.
++* - Load extension with background page.
++* - Open the add-on storage panel. From the panel:
++*   - Add a few storage items,
++*   - Edit the value of a storage item,
++*   - Edit the name of a storage item,
++*   - Remove a storage item,
++*   - Remove all of the storage items,
++* - For each modification, the storage data retrieved by the extension should match the
++*   data in the panel.
 +*/
-+add_task(async function test_local_storage_ext_data_added_prior_to_ext_startup() {
-+  // The pref to leave the addonid->uuid mapping around after uninstall so that we can
-+  // re-attach to the same storage
-+  Services.prefs.setBoolPref(LEAVE_UUID_PREF, true);
-+
-+  // The pref to prevent cleaning up storage on uninstall
-+  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, true);
-+
-+  let extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background: extensionScriptWithMessageListener})
++add_task(async function test_modifying_items_in_panel_updates_extension_storage_data() {
++  const extension = await startupExtension(
++    getExtensionConfig({background: extensionScriptWithMessageListener}),
 +  );
-+
-+  await extension.startup();
 +
 +  const host = await extension.awaitMessage("extension-origin");
 +
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
++  const {target, extensionStorage} = await openAddonStoragePanel(extension.id);
 +
-+  await shutdown(extension);
++  const DEFAULT_VALUE = "value"; // global in devtools/server/actors/storage.js
++  let items = {
++    guid_1: DEFAULT_VALUE,
++    guid_2: DEFAULT_VALUE,
++    guid_3: DEFAULT_VALUE,
++  };
 +
-+  // Reinstall the same extension
-+  extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({background: extensionScriptWithMessageListener})
++  info("Waiting for panel to add some storage items");
++  for (const key of Object.keys(items)) {
++    await extensionStorage.addItem(key, host);
++  }
++
++  extension.sendMessage("storage-local-get", Object.keys(items));
++  let extItems = await extension.awaitMessage("storage-local-get:done");
++  Assert.deepEqual(
++    items,
++    extItems,
++    `The storage items in the extension match the items in the panel`
 +  );
 +
-+  await extension.startup();
-+
-+  await extension.awaitMessage("extension-origin");
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  let {data} = await extensionStorage.getStoreObjects(host);
++  info("Waiting for panel to edit some items");
++  await extensionStorage.editItem({
++    host,
++    field: "value",
++    items: {name: "guid_1", value: "anotherValue"},
++    DEFAULT_VALUE,
++  });
++  await extensionStorage.editItem({
++    host,
++    field: "name",
++    items: {name: "guid_4", value: DEFAULT_VALUE},
++    oldValue: "guid_2",
++  });
++  items = {
++    guid_1: "anotherValue",
++    guid_4: DEFAULT_VALUE,
++    guid_3: DEFAULT_VALUE,
++  };
++  extension.sendMessage("storage-local-get", Object.keys(items));
++  extItems = await extension.awaitMessage("storage-local-get:done");
 +  Assert.deepEqual(
-+    data,
++    items,
++    extItems,
++    `The storage items in the extension match the items in the panel`
++  );
++
++  info("Waiting for panel to remove an item");
++  await extensionStorage.removeItem(host, "guid_3");
++  items = {
++    guid_1: "anotherValue",
++    guid_4: DEFAULT_VALUE,
++  };
++  extension.sendMessage("storage-local-get", Object.keys(items));
++  extItems = await extension.awaitMessage("storage-local-get:done");
++  Assert.deepEqual(
++    items,
++    extItems,
++    `The storage items in the extension match the items in the panel`
++  );
++
++  info("Waiting for panel to remove all items");
++  await extensionStorage.removeAll(host);
++  items = {};
++  extension.sendMessage("storage-local-get", Object.keys(items));
++  extItems = await extension.awaitMessage("storage-local-get:done");
++  Assert.deepEqual(
++    items,
++    extItems,
++    `The storage items in the extension match the items in the panel`
++  );
++
++  await shutdown(extension, target);
++});
++
++/**
+ * Test case: Storage panel shows extension storage data added prior to extension startup
+ * - Load extension that adds a storage item
+ * - Uninstall the extension
+@@ -522,7 +693,7 @@ add_task(async function test_panel_data_
+   let {data} = await extensionStorage.getStoreObjects(host);
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  // Related test case
-+  extension.sendMessage("storage-local-set", {b: 456});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  data = (await extensionStorage.getStoreObjects(host)).data;
-+  Assert.deepEqual(
-+    data,
-+    [
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -534,8 +705,8 @@ add_task(async function test_panel_data_
+   Assert.deepEqual(
+     data,
+     [
+-      {area: "local", name: "a", value: {str: "123"}},
+-      {area: "local", name: "b", value: {str: "456"}},
 +      {area: "local", name: "a", value: {str: "123"}, editable: true},
 +      {area: "local", name: "b", value: {str: "456"}, editable: true},
-+    ],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  Services.prefs.setBoolPref(LEAVE_STORAGE_PREF, false);
-+  Services.prefs.setBoolPref(LEAVE_UUID_PREF, false);
-+
-+  await shutdown(extension, target);
-+});
-+
-+add_task(function cleanup_for_test_local_storage_ext_data_added_prior_to_ext_startup() {
-+  Services.prefs.clearUserPref(LEAVE_UUID_PREF);
-+  Services.prefs.clearUserPref(LEAVE_STORAGE_PREF);
-+});
-+
-+/**
-+* Test case: Bg page adds an item to storage. With inspector open, reload extension.
-+* - Load extension with background page that adds a storage item on message.
-+* - Open the add-on inspector.
-+* - With the inspector still open, reload the extension.
-+* - The data in the inspector should match the item added prior to reloading.
-+*/
-+add_task(async function test_local_storage_live_reload() {
-+  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
-+  let manifest = {
-+    version: "1.0",
-+    applications: {
-+      gecko: {
-+        id: EXTENSION_ID,
-+      },
-+    },
-+  };
-+
-+  info("Loading extension version 1.0");
-+  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({
-+      manifest,
-+      background: extensionScriptWithMessageListener,
-+    })
-+  );
-+
-+  info("Starting up extension");
-+  await extension.startup();
-+
-+  info("Waiting for message from test extension");
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  info("Adding storage item");
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  manifest = {
-+    ...manifest,
-+    version: "2.0",
-+  };
-+  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
-+  info("Update to version 2.0");
-+  await extension.upgrade(
-+    getExtensionConfig({
-+      manifest,
-+      background: extensionScriptWithMessageListener,
-+    }),
-+  );
-+
-+  await extension.awaitMessage("extension-origin");
-+
-+  const {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(
-+    data,
+     ],
+     "Got the expected results on populated storage.local"
+   );
+@@ -604,7 +775,7 @@ add_task(async function test_panel_live_
+   const {data} = await extensionStorage.getStoreObjects(host);
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: Transient page adds an item to storage. With inspector open,
-+* reload extension.
-+* - Load extension open transient page that adds a storage item on message.
-+* - Open the add-on storage inspector.
-+* - With the inspector still open, reload the extension.
-+* - The data in the inspector should match the item added prior to reloading.
-+*/
-+add_task(async function test_local_storage_live_reload_no_bg_page() {
-+  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
-+  let manifest = {
-+    version: "1.0",
-+    applications: {
-+      gecko: {
-+        id: EXTENSION_ID,
-+      },
-+    },
-+  };
-+
-+  info("Loading extension version 1.0");
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig({
-+    manifest,
-+    files: ext_no_bg.files,
-+  }));
-+
-+  info("Starting up extension");
-+  await extension.startup();
-+
-+  info("Opening extension page in a tab");
-+  const url = extension.extension.baseURI.resolve("extension_page_in_tab.html");
-+  const contentPage = await ExtensionTestUtils.loadContentPage(url, {extension});
-+
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  info("Waiting for extension page in a tab to add storage item");
-+  extension.sendMessage("storage-local-set", {a: 123});
-+  await extension.awaitMessage("storage-local-set:done");
-+
-+  await contentPage.close();
-+
-+  info("Opening storage inspector");
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  manifest = {
-+    ...manifest,
-+    version: "2.0",
-+  };
-+  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
-+  info("Updating extension to version 2.0");
-+  await extension.upgrade(
-+    getExtensionConfig({
-+      manifest,
-+      files: ext_no_bg.files,
-+    })
-+  );
-+
-+  const {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(
-+    data,
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -668,7 +839,7 @@ add_task(async function test_panel_live_
+   const {data} = await extensionStorage.getStoreObjects(host);
+   Assert.deepEqual(
+     data,
+-    [{area: "local", name: "a", value: {str: "123"}}],
 +    [{area: "local", name: "a", value: {str: "123"}, editable: true}],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-+
-+/**
-+* Test case: Bg page automatically adds item(s). With inspector open, reload extension.
-+* - Load extension with background page that automatically adds a storage item on startup.
-+* - Open the add-on inspector.
-+* - With the inspector still open, reload the extension.
-+* - The data in the inspector should match the item(s) added by the reloaded extension.
-+*/
-+add_task(async function test_local_storage_live_reload_bg_page_auto_adds_items() {
-+  async function background() {
-+    await browser.storage.local.set({a: {b: 123}, c: {d: 456}});
-+    browser.test.sendMessage("extension-origin", window.location.origin);
-+  }
-+  const EXTENSION_ID = "test_local_storage_live_reload@xpcshell.mozilla.org";
-+  let manifest = {
-+    version: "1.0",
-+    applications: {
-+      gecko: {
-+        id: EXTENSION_ID,
-+      },
-+    },
-+  };
-+
-+  info("Loading extension version 1.0");
-+  const extension = ExtensionTestUtils.loadExtension(
-+    getExtensionConfig({
-+      manifest,
-+      background,
-+    })
-+  );
-+
-+  info("Starting up extension");
-+  await extension.startup();
-+
-+  info("Waiting for message from test extension");
-+  const host = await extension.awaitMessage("extension-origin");
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+  // This effectively opens the storage inspector by calling listStores
-+  const extensionStorage = await getExtensionStorage(target);
-+
-+  manifest = {
-+    ...manifest,
-+    version: "2.0",
-+  };
-+  // "Reload" is most similar to an upgrade, as e.g. storage data is preserved
-+  info("Update to version 2.0");
-+  await extension.upgrade(
-+    getExtensionConfig({
-+      manifest,
-+      background,
-+    }),
-+  );
-+
-+  await extension.awaitMessage("extension-origin");
-+
-+  const {data} = await extensionStorage.getStoreObjects(host);
-+  Assert.deepEqual(
-+    data,
-+    [
+     "Got the expected results on populated storage.local"
+   );
+ 
+@@ -726,8 +897,8 @@ add_task(async function test_panel_live_
+   Assert.deepEqual(
+     data,
+     [
+-      {area: "local", name: "a", value: {str: "{\"b\":123}"}},
+-      {area: "local", name: "c", value: {str: "{\"d\":456}"}},
 +      {area: "local", name: "a", value: {str: "{\"b\":123}"}, editable: true},
 +      {area: "local", name: "c", value: {str: "{\"d\":456}"}, editable: true},
-+    ],
-+    "Got the expected results on populated storage.local"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-+
-+/*
-+* This task should be last, as it sets a pref to disable the extensionStorage
-+* storage actor. Since this pref is set at the beginning of the file, it
-+* already will be cleared via registerCleanupFunction when the test finishes.
-+*/
-+add_task(async function test_extension_store_disabled_on_pref() {
-+  const extension = ExtensionTestUtils.loadExtension(getExtensionConfig());
-+
-+  await extension.startup();
-+
-+  const {target} = await setupExtensionDebugging(extension.id);
-+
-+  Services.prefs.setBoolPref(EXTENSION_STORAGE_ENABLED_PREF, false);
-+  const extensionStorage = await getExtensionStorage(target);
-+  ok(
-+    extensionStorage === null,
-+    "Should not have an extensionStorage store when pref disabled"
-+  );
-+
-+  await shutdown(extension, target);
-+});
-diff --git a/devtools/server/tests/unit/xpcshell.ini b/devtools/server/tests/unit/xpcshell.ini
---- a/devtools/server/tests/unit/xpcshell.ini
-+++ b/devtools/server/tests/unit/xpcshell.ini
-@@ -59,6 +59,7 @@ support-files =
- [test_blackboxing-05.js]
- [test_blackboxing-07.js]
- [test_blackboxing-08.js]
-+[test_extension_storage_actor.js]
- [test_frameactor-01.js]
- [test_frameactor-02.js]
- [test_frameactor-03.js]
+     ],
+     "Got the expected results on populated storage.local"
+   );
 diff --git a/devtools/shared/moz.build b/devtools/shared/moz.build
 --- a/devtools/shared/moz.build
 +++ b/devtools/shared/moz.build
@@ -2216,32 +2774,17 @@ diff --git a/devtools/shared/moz.build b/devtools/shared/moz.build
 diff --git a/devtools/shared/specs/storage.js b/devtools/shared/specs/storage.js
 --- a/devtools/shared/specs/storage.js
 +++ b/devtools/shared/specs/storage.js
-@@ -163,6 +163,25 @@ createStorageSpec({
-   methods: storageMethods,
- });
- 
-+types.addDictType("extensionobject", {
-+  name: "nullable:string",
-+  value: "nullable:longstring",
-+});
-+
-+types.addDictType("extensionstoreobject", {
-+  total: "number",
-+  offset: "number",
-+  data: "array:nullable:extensionobject",
-+});
-+
-+createStorageSpec({
-+  typeName: "extensionStorage",
-+  storeObjectType: "extensionstoreobject",
+@@ -177,7 +177,9 @@ types.addDictType("extensionstoreobject"
+ createStorageSpec({
+   typeName: "extensionStorage",
+   storeObjectType: "extensionstoreobject",
+-  methods: {},
 +  methods: {
 +    ...storageMethods,
 +  },
-+});
-+
+ });
+ 
  types.addDictType("cacheobject", {
-   "url": "string",
-   "status": "string",
 diff --git a/devtools/shared/storage/moz.build b/devtools/shared/storage/moz.build
 new file mode 100644
 --- /dev/null
@@ -2432,6 +2975,7 @@ new file mode 100644
 +DevToolsModules(
 +    'jsol.js',
 +)
+\ No newline at end of file
 diff --git a/devtools/client/shared/vendor/stringvalidator/UPDATING.md b/devtools/shared/storage/vendor/stringvalidator/UPDATING.md
 rename from devtools/client/shared/vendor/stringvalidator/UPDATING.md
 rename to devtools/shared/storage/vendor/stringvalidator/UPDATING.md
@@ -2441,12 +2985,34 @@ rename to devtools/shared/storage/vendor/stringvalidator/moz.build
 diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js b/devtools/shared/storage/vendor/stringvalidator/tests/unit/head_stringvalidator.js
 rename from devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js
 rename to devtools/shared/storage/vendor/stringvalidator/tests/unit/head_stringvalidator.js
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/head_stringvalidator.js
++++ b/devtools/shared/storage/vendor/stringvalidator/tests/unit/head_stringvalidator.js
+@@ -2,7 +2,7 @@
+ 
+ const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm", {});
+ 
+-this.validator = require("devtools/client/shared/vendor/stringvalidator/validator");
++this.validator = require("devtools/shared/storage/vendor/stringvalidator/validator");
+ 
+ function describe(suite, testFunc) {
+   info(`\n                            Test suite: ${suite}`.toUpperCase());
 diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_sanitizers.js b/devtools/shared/storage/vendor/stringvalidator/tests/unit/test_sanitizers.js
 rename from devtools/client/shared/vendor/stringvalidator/tests/unit/test_sanitizers.js
 rename to devtools/shared/storage/vendor/stringvalidator/tests/unit/test_sanitizers.js
 diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js b/devtools/shared/storage/vendor/stringvalidator/tests/unit/test_validators.js
 rename from devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js
 rename to devtools/shared/storage/vendor/stringvalidator/tests/unit/test_validators.js
+--- a/devtools/client/shared/vendor/stringvalidator/tests/unit/test_validators.js
++++ b/devtools/shared/storage/vendor/stringvalidator/tests/unit/test_validators.js
+@@ -7,7 +7,7 @@
+ 
+  "use strict";
+ 
+-var assert = require('devtools/client/shared/vendor/stringvalidator/util/assert').assert;
++var assert = require('devtools/shared/storage/vendor/stringvalidator/util/assert').assert;
+ 
+ function test(options) {
+   var args = options.args || [];
 diff --git a/devtools/client/shared/vendor/stringvalidator/tests/unit/xpcshell.ini b/devtools/shared/storage/vendor/stringvalidator/tests/unit/xpcshell.ini
 rename from devtools/client/shared/vendor/stringvalidator/tests/unit/xpcshell.ini
 rename to devtools/shared/storage/vendor/stringvalidator/tests/unit/xpcshell.ini
@@ -2459,70 +3025,3 @@ rename to devtools/shared/storage/vendor/stringvalidator/util/moz.build
 diff --git a/devtools/client/shared/vendor/stringvalidator/validator.js b/devtools/shared/storage/vendor/stringvalidator/validator.js
 rename from devtools/client/shared/vendor/stringvalidator/validator.js
 rename to devtools/shared/storage/vendor/stringvalidator/validator.js
-diff --git a/toolkit/components/extensions/ExtensionStorageIDB.jsm b/toolkit/components/extensions/ExtensionStorageIDB.jsm
---- a/toolkit/components/extensions/ExtensionStorageIDB.jsm
-+++ b/toolkit/components/extensions/ExtensionStorageIDB.jsm
-@@ -599,6 +599,11 @@ this.ExtensionStorageIDB = {
-         const serializedPrincipal = new StructuredCloneHolder(storagePrincipal, this);
- 
-         promise = migrateJSONFileData(extension, storagePrincipal).then(() => {
-+          extension.setSharedData("storageIDBBackend", true);
-+          if (storagePrincipal) {
-+            extension.setSharedData("storageIDBPrincipal", storagePrincipal);
-+          }
-+          Services.ppmm.sharedData.flush();
-           return {backendEnabled: true, storagePrincipal: serializedPrincipal};
-         }).catch(err => {
-           // If the data migration promise is rejected, the old data has been read
-@@ -612,6 +617,9 @@ this.ExtensionStorageIDB = {
-           // data about it may be useful.
-           extension.logWarning("JSONFile backend is being kept enabled by an unexpected " +
-                                `IDBBackend failure: ${err.message}::${err.stack}`);
-+          extension.setSharedData("storageIDBBackend", false);
-+          Services.ppmm.sharedData.flush();
-+
-           return {backendEnabled: false};
-         });
-       }
-diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/components/extensions/parent/ext-storage.js
---- a/toolkit/components/extensions/parent/ext-storage.js
-+++ b/toolkit/components/extensions/parent/ext-storage.js
-@@ -8,6 +8,8 @@ XPCOMUtils.defineLazyModuleGetters(this,
-   NativeManifests: "resource://gre/modules/NativeManifests.jsm",
- });
- 
-+var {ExtensionParent} = ChromeUtils.import("resource://gre/modules/ExtensionParent.jsm");
-+
- var {
-   ExtensionError,
- } = ExtensionUtils;
-@@ -37,6 +39,21 @@ const lookupManagedStorage = async (exte
-   return null;
- };
- 
-+// Notify storage actor when storage data has changed if the extension is targeted
-+// by a developer toolbox.
-+function notifyDevToolsListeners(extension, changes) {
-+  const {DebugUtils} = ExtensionParent;
-+  let debugBrowserPromise = DebugUtils.debugBrowserPromises.get(extension.id);
-+  if (debugBrowserPromise) {
-+    (async () => {
-+      const browser = await debugBrowserPromise;
-+      browser.messageManager.sendAsyncMessage(
-+        `Extension:DevTools:OnStorageLocalChanged`,
-+        {changes, extensionUUID: extension.uuid});
-+    })();
-+  }
-+}
-+
- this.storage = class extends ExtensionAPI {
-   constructor(extension) {
-     super(extension);
-@@ -82,6 +99,7 @@ this.storage = class extends ExtensionAP
-             const changes = await db[method](...args);
-             if (changes) {
-               ExtensionStorageIDB.notifyListeners(extension.id, changes);
-+              notifyDevToolsListeners(extension, changes);
-             }
-             return changes;
-           },
