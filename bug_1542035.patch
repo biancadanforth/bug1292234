@@ -2,8 +2,8 @@
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1560109542 25200
 #      Sun Jun 09 12:45:42 2019 -0700
-# Node ID 0cffb9f87871de329c9158ada01f5210b732a19b
-# Parent  7a44faddc33d2e5d7435fbff216cc022d0fb5e6e
+# Node ID 285b676f20dbba9b5ca64cbc323887f0612329e9
+# Parent  d72ab884f0394d6e9ab723f03bd43c90a84d7e5b
 Bug 1542035 - Add read-only support for extension storage.local in addon debugger
 
 * Add a new extensionStorage actor to enable inspection of data stored by an extension using the WebExtension storage.local API in the Storage panel client.
@@ -72,7 +72,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  loader.lazyRequireGetter(this, "naturalSortCaseInsensitive",
    "devtools/client/shared/natural-sort", true);
  
-@@ -1300,6 +1306,408 @@ StorageActors.createActor({
+@@ -1300,6 +1306,412 @@ StorageActors.createActor({
    observationTopics: ["dom-storage2-changed", "dom-private-storage2-changed"],
  }, getObjectForLocalOrSessionStorage("sessionStorage"));
  
@@ -242,6 +242,11 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      this.onWindowDestroyed = this.onWindowDestroyed.bind(this);
 +      this.storageActor.on("window-ready", this.onWindowReady);
 +      this.storageActor.on("window-destroyed", this.onWindowDestroyed);
++
++      // Since preListStores doesn't get called when the toolbox targets a
++      // non-extension process, we need to initialize this.hostVsStores here,
++      // so we don't throw when it is cleared in our actor's destroy method.
++      this.hostVsStores = new Map();
 +    },
 +
 +    destroy() {
@@ -338,7 +343,6 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 +      // or this actor will need to deviate from how this.hostVsStores is defined in the
 +      // framework to associate each storage item with a storage area. Any methods
 +      // that use it will also need to be updated (e.g. getNamesForHost).
-+      this.hostVsStores = new Map();
 +      const extension = ExtensionProcessScript.getExtensionChild(this.addonId);
 +      await this.populateStoresForHost(`moz-extension://${extension.uuid}`);
 +    },
@@ -481,7 +485,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  StorageActors.createActor({
    typeName: "Cache",
  }, {
-@@ -2690,9 +3098,12 @@ const StorageActor = protocol.ActorClass
+@@ -2690,9 +3102,12 @@ const StorageActor = protocol.ActorClass
          (!subject.location.href || subject.location.href == "about:blank")) {
        return null;
      }
@@ -497,7 +501,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
        this.childWindowPool.add(subject);
        this.emit("window-ready", subject);
      } else if (topic == "inner-window-destroyed") {
-@@ -2747,6 +3158,11 @@ const StorageActor = protocol.ActorClass
+@@ -2747,6 +3162,11 @@ const StorageActor = protocol.ActorClass
      const toReturn = {};
  
      for (const [name, value] of this.childActorPool) {
@@ -512,7 +516,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
 diff --git a/devtools/server/tests/browser/browser.ini b/devtools/server/tests/browser/browser.ini
 --- a/devtools/server/tests/browser/browser.ini
 +++ b/devtools/server/tests/browser/browser.ini
-@@ -133,6 +133,7 @@ skip-if = e10s # Bug 1183605 - devtools/
+@@ -132,6 +132,7 @@ skip-if = e10s # Bug 1183605 - devtools/
  [browser_storage_dynamic_windows.js]
  [browser_storage_listings.js]
  [browser_storage_updates.js]
@@ -1430,8 +1434,8 @@ diff --git a/toolkit/components/extensions/parent/ext-storage.js b/toolkit/compo
 # User Bianca Danforth <bdanforth@mozilla.com>
 # Date 1560110743 25200
 #      Sun Jun 09 13:05:43 2019 -0700
-# Node ID 8085efc94b0ed754918a1f9dbe564288b18711b1
-# Parent  0cffb9f87871de329c9158ada01f5210b732a19b
+# Node ID 4427fb961ecdeca0c449ea316031b66c6bdd751e
+# Parent  285b676f20dbba9b5ca64cbc323887f0612329e9
 Bug 1542035 - Add limited write support for extension storage.local in addon debugger
 
 * Update the extensionStorage actor to enable some writing to extension storage.local through the Storage panel client.
@@ -1447,7 +1451,7 @@ Differential Revision: https://phabricator.services.mozilla.com/D34416
 diff --git a/.eslintignore b/.eslintignore
 --- a/.eslintignore
 +++ b/.eslintignore
-@@ -170,6 +170,7 @@ devtools/shared/node-properties/*
+@@ -171,6 +171,7 @@ devtools/shared/node-properties/*
  devtools/shared/pretty-fast/*
  devtools/shared/sourcemap/*
  devtools/shared/sprintfjs/*
@@ -2258,7 +2262,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
  
    // Sets the parent process message manager
    setPpmm(ppmm) {
-@@ -1665,20 +1774,21 @@ if (Services.prefs.getBoolPref(EXTENSION
+@@ -1669,20 +1778,21 @@ if (Services.prefs.getBoolPref(EXTENSION
        const {name, value} = item;
  
        let newValue;
@@ -2291,7 +2295,7 @@ diff --git a/devtools/server/actors/storage.js b/devtools/server/actors/storage.
          }
        }
  
-@@ -1695,16 +1805,103 @@ if (Services.prefs.getBoolPref(EXTENSION
+@@ -1699,16 +1809,103 @@ if (Services.prefs.getBoolPref(EXTENSION
          name,
          value: new LongStringActor(this.conn, newValue || ""),
          area: "local", // Bug 1542038, 1542039: set the correct storage area
