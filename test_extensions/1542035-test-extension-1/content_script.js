@@ -8,6 +8,7 @@ port.postMessage({
 
 const portMessageHandlers = new Map([
   ["cs-add-item", csAddItem],
+  ["cs-bulk-add-items", csBulkAddItems],
 ]);
 
 port.onMessage.addListener((portMessage) => {
@@ -19,8 +20,10 @@ port.onMessage.addListener((portMessage) => {
 });
 
 async function csAddItem(message, port) {
-  console.log("adding item in content script");
   await browser.storage.local.set(message.item);
-  return item;
+}
+
+async function csBulkAddItems(message, port) {
+  await browser.storage.local.set(message.items);
 }
 }());

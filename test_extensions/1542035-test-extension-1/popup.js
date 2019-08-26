@@ -6,8 +6,14 @@
   port.postMessage({type: 'browser-action-opened', sender: 'browser-action'});
 
   const bgAddItem = document.getElementById('bg-add-item');
-  bgAddItem.addEventListener('click', () => port.postMessage({type: 'bg-page-add-item'}));
+  bgAddItem.addEventListener('click', () => port.postMessage({type: 'bg-add-item'}));
 
   const csAddItem = document.getElementById('cs-add-item');
   csAddItem.addEventListener('click', () => port.postMessage({type: 'cs-add-item'}));
+
+  const bgBulkAddItems = document.getElementById('bg-bulk-add-items');
+  bgBulkAddItems.addEventListener('click', () => port.postMessage({type: 'bg-bulk-add-items'}));
+
+  const csBulkAddItems = document.getElementById('cs-bulk-add-items');
+  csBulkAddItems.addEventListener('click', () => port.postMessage({type: 'cs-bulk-add-items'}));
 })();

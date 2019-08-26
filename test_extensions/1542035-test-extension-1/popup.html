@@ -8,12 +8,17 @@
         border-bottom: 1px solid black;
         cursor: pointer;
       }
+      #browser-action-app div:hover {
+        background-color: yellow;
+      }
     </style>
   </head>
   <body>
     <div id="browser-action-app">
       <div id="bg-add-item">Background page adds a new storage item</div>
       <div id="cs-add-item">Content script adds a new storage item</div>
+      <div id="bg-bulk-add-items">Background page bulk adds 10 new storage items</div>
+      <div id="cs-bulk-add-items">Content script bulk adds 10 new storage items</div>
     </div>
     <script src="popup.js"></script>
   </body>
