@@ -2,8 +2,8 @@
   let BROWSER_ACTION_PORT = null;
   let CONTENT_SCRIPT_PORT = null;
 
-  let nextKey = 0;
-  let nextValue = 0;
+  let nextKey = 1;
+  let nextValue = 1;
   const map = new Map();
   map.set("a", "b");
   const set = new Set();
@@ -13,11 +13,7 @@
   const date = new Date(0);
   const regexp = /regexp/;
 
-  // await browser.storage.local.set({a: 123, b: 456});
-
-
   function handleChange(changes, areaName) {}
-
   browser.storage.onChanged.addListener(handleChange);
 
   // Messages from the browserAction popup script
@@ -25,17 +21,33 @@
     ['browser-action-opened', () => console.log("browserAction popup script loaded")],
     ['bg-add-item', () => addItem('background-script')],
     ['bg-bulk-add-items', () => bulkAddItems('background-script')],
-    ['bg-edit-item', () => {}],
+    ['bg-edit-item', () => editItem('background-script')],
+    ['bg-bulk-edit-item', () => bulkEditItems('background-script')],
+    ['bg-remove-item', () => removeItem('background-script')],
+    ['bg-bulk-remove-items', () => bulkRemoveItems('background-script')],
+    ['bg-remove-all-items', () => removeAllItems('background-script')],
     ['content-script-opened', () => console.log("content script loaded")],
     ['cs-add-item', () => addItem('content-script')],
     ['cs-bulk-add-items', () => bulkAddItems('content-script')],
+    ['cs-bulk-edit-item', () => bulkEditItems('content-script')],
+    ['cs-remove-item', () => removeItem('content-script')],
+    ['cs-bulk-remove-items', () => bulkRemoveItems('content-script')],
+    ['cs-remove-all-items', () => removeAllItems('content-script')],
+    // TODO add menu item for non-JSONifiable values above
+    // TODO add menu item for all JSONifiable values
   ]);
 
   function handleConnect(port) {
     port.onMessage.addListener((portMessage) => {
       if (!BROWSER_ACTION_PORT && portMessage.sender === 'browser-action') {
+        port.onDisconnect.addListener(() => {
+          BROWSER_ACTION_PORT = null;
+        });
         BROWSER_ACTION_PORT = port;
       } else if (!CONTENT_SCRIPT_PORT && portMessage.sender === 'content-script') {
+        port.onDisconnect.addListener(() => {
+          CONTENT_SCRIPT_PORT = null;
+        });
         CONTENT_SCRIPT_PORT = port;
       }
       if (portMessageHandlers.has(portMessage.type)) {
@@ -53,14 +65,14 @@
     } else {
       await browser.storage.local.set(item);
     }
-    console.log(`${fromScript} added item with key ${item[nextKey]} and value ${item[nextValue]}.`);
+    console.log(`${fromScript} added item: `, item);
     nextKey++;
     nextValue++;
   }
 
   async function bulkAddItems(fromScript) {
     const items = {};
-    for (let i = 0; i < 10; i++) {
+    for (let i = 1; i <= 10; i++) {
       const item = {};
       items[nextKey] = nextValue;
       nextKey++;
@@ -71,8 +83,14 @@
     } else {
       await browser.storage.local.set(items);
     }
-    console.log(`${fromScript} bulk added items ${items}`);
+    console.log(`${fromScript} bulk added items: `, items);
   }
+
+  async function editItem(fromScript) {/* TODO */}
+  async function bulkEditItems(fromScript) {/* TODO */}
+  async function removeItem(fromScript) {/* TODO */}
+  async function bulkRemoveItems(fromScript) {/* TODO */}
+  async function removeAllItems(fromScript) {/* TODO */}
 
   // Register centralized message handlers
   browser.runtime.onConnect.addListener(handleConnect);

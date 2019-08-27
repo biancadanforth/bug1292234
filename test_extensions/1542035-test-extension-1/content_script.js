@@ -1,4 +1,3 @@
-console.log(1);
 (async function main() {
 const port = browser.runtime.connect();
 port.postMessage({
@@ -20,10 +19,12 @@ port.onMessage.addListener((portMessage) => {
 });
 
 async function csAddItem(message, port) {
+  console.log("content script added item: ", message.item);
   await browser.storage.local.set(message.item);
 }
 
 async function csBulkAddItems(message, port) {
+  console.log("content script bulk added items: ", message.items);
   await browser.storage.local.set(message.items);
 }
 }());
