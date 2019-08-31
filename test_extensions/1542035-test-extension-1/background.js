@@ -37,7 +37,7 @@
     ['bg-add-item', () => addItem('background-script')],
     ['bg-bulk-add-items', () => bulkAddItems('background-script')],
     ['bg-edit-item', () => editItem('background-script')],
-    ['bg-bulk-edit-item', () => bulkEditItems('background-script')],
+    ['bg-bulk-edit-items', () => bulkEditItems('background-script')],
     ['bg-remove-item', () => removeItem('background-script')],
     ['bg-bulk-remove-items', () => bulkRemoveItems('background-script')],
     ['bg-remove-all-items', () => removeAllItems('background-script')],
@@ -45,7 +45,7 @@
     ['cs-add-item', () => addItem('content-script')],
     ['cs-bulk-add-items', () => bulkAddItems('content-script')],
     ['cs-edit-item', () => editItem('content-script')],
-    ['cs-bulk-edit-item', () => bulkEditItems('content-script')],
+    ['cs-bulk-edit-items', () => bulkEditItems('content-script')],
     ['cs-remove-item', () => removeItem('content-script')],
     ['cs-bulk-remove-items', () => bulkRemoveItems('content-script')],
     ['cs-remove-all-items', () => removeAllItems('content-script')],
@@ -102,38 +102,51 @@
     console.log(`${fromScript} bulk added items: `, items);
   }
 
-  async function editItem(fromScript) {
-    console.log("editItem");
+  async function editItem(fromScript, randomKey = null) {
     const allItemsKeys = Object.keys(await browser.storage.local.get());
     if (allItemsKeys.length === 0) {
       console.error('There are no items in extension storage local. To edit an item, please add one or more storage items first.');
       return;
-    } else {
+    } else if (!randomKey) {
       // Select a random item to edit
       const randomIndex = Math.floor(Math.random() * allItemsKeys.length);
-      const randomKey = allItemsKeys[randomIndex];
-      const randomItem = await browser.storage.local.get(randomKey);
+      randomKey = allItemsKeys[randomIndex];
+    }
 
-      // Determine the type of its current value
-      const randomValue = randomItem[randomKey];
-      const type = typeof randomValue;
+    // Determine the type of its current value
+    const randomItem = await browser.storage.local.get(randomKey);
+    const randomValue = randomItem[randomKey];
+    const type = typeof randomValue;
 
-      // Set its new value to a value of a different, random type. Changing the type of the value
-      // ensures the value actually changes.
-      const newTypeRandomIndex = Math.floor(Math.random() * (ACCEPTABLE_TYPES.length - 1));
-      const newType = (ACCEPTABLE_TYPES.filter(t => t !== type))[newTypeRandomIndex];
-      const newValue = NEW_VALUES_BY_TYPE[newType];
+    // Set its new value to a value of a different, random type. Changing the type of the value
+    // ensures the value actually changes.
+    const newTypeRandomIndex = Math.floor(Math.random() * (ACCEPTABLE_TYPES.length - 1));
+    const newType = (ACCEPTABLE_TYPES.filter(t => t !== type))[newTypeRandomIndex];
+    const newValue = NEW_VALUES_BY_TYPE[newType];
 
-      const item = {[randomKey]: newValue};
-      if (fromScript === 'content-script') {
-        await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-edit-item', item}); 
-      } else {
-        await browser.storage.local.set(item);
-      }
-      console.log(`${fromScript} edited item `, randomItem, "; it is now ", item);
+    const item = {[randomKey]: newValue};
+    if (fromScript === 'content-script') {
+      await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-edit-item', item}); 
+    } else {
+      await browser.storage.local.set(item);
+    }
+    console.log(`${fromScript} edited item `, randomItem, "; it is now ", item);
+  }
+
+  async function bulkEditItems(fromScript) {
+    // Edit the first 10 (or first n if n < 10) items in storage local
+    const allItemsKeys = Object.keys(await browser.storage.local.get());
+    if (allItemsKeys.length === 0) {
+      console.error('There are no items in extension storage local. To edit an item, please add one or more storage items first.');
+      return;
+    }
+
+    // Take the first n keys in storage for n <= 10
+    const keysToEdit = allItemsKeys.slice(0, allItemsKeys.length > 10 ? 10 : allItemsKeys.length);
+    for (const key of keysToEdit) {
+      editItem(fromScript, key);
     }
   }
-  async function bulkEditItems(fromScript) {/* TODO */}
   async function removeItem(fromScript) {/* TODO */}
   async function bulkRemoveItems(fromScript) {/* TODO */}
   async function removeAllItems(fromScript) {/* TODO */}

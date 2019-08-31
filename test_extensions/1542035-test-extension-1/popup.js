@@ -22,4 +22,10 @@
 
   const csEditItem = document.getElementById('cs-edit-item');
   csEditItem.addEventListener('click', () => port.postMessage({type: 'cs-edit-item'}));
+
+  const bgBulkEditItems = document.getElementById('bg-bulk-edit-items');
+  bgBulkEditItems.addEventListener('click', () => port.postMessage({type: 'bg-bulk-edit-items'}));
+
+  const csBulkEditItems = document.getElementById('cs-bulk-edit-items');
+  csBulkEditItems.addEventListener('click', () => port.postMessage({type: 'cs-bulk-edit-items'}));
 })();
