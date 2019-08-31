@@ -147,7 +147,25 @@
       editItem(fromScript, key);
     }
   }
-  async function removeItem(fromScript) {/* TODO */}
+  async function removeItem(fromScript, randomKey = null) {
+    const allItemsKeys = Object.keys(await browser.storage.local.get());
+    if (allItemsKeys.length === 0) {
+      console.error('There are no items in extension storage local. To remove an item, please add one or more storage items first.');
+      return;
+    } else if (!randomKey) {
+      // Select a random item to edit
+      const randomIndex = Math.floor(Math.random() * allItemsKeys.length);
+      randomKey = allItemsKeys[randomIndex];
+    }
+
+    const item = await browser.storage.local.get(randomKey);
+    if (fromScript === 'content-script') {
+      await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-remove-item', item}); 
+    } else {
+      await browser.storage.local.remove(randomKey);
+    }
+    console.log(`${fromScript} removed item `, item);
+  }
   async function bulkRemoveItems(fromScript) {/* TODO */}
   async function removeAllItems(fromScript) {/* TODO */}
 

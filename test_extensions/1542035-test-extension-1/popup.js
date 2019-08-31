@@ -2,30 +2,25 @@
   // Notify the background script that the browser action has been opened. This
   // must be done using connect so that the background script can detect when the
   // panel closes.
+
+  const IDS = [
+    "bg-add-item",
+    "cs-add-item",
+    "bg-bulk-add-items",
+    "cs-bulk-add-items",
+    "bg-edit-item",
+    "cs-edit-item",
+    "bg-bulk-edit-items",
+    "cs-bulk-edit-items",
+    "bg-remove-item",
+    "cs-remove-item",
+  ];
+
   const port = browser.runtime.connect();
   port.postMessage({type: 'browser-action-opened', sender: 'browser-action'});
 
-  const bgAddItem = document.getElementById('bg-add-item');
-  bgAddItem.addEventListener('click', () => port.postMessage({type: 'bg-add-item'}));
-
-  const csAddItem = document.getElementById('cs-add-item');
-  csAddItem.addEventListener('click', () => port.postMessage({type: 'cs-add-item'}));
-
-  const bgBulkAddItems = document.getElementById('bg-bulk-add-items');
-  bgBulkAddItems.addEventListener('click', () => port.postMessage({type: 'bg-bulk-add-items'}));
-
-  const csBulkAddItems = document.getElementById('cs-bulk-add-items');
-  csBulkAddItems.addEventListener('click', () => port.postMessage({type: 'cs-bulk-add-items'}));
-
-  const bgEditItem = document.getElementById('bg-edit-item');
-  bgEditItem.addEventListener('click', () => port.postMessage({type: 'bg-edit-item'}));
-
-  const csEditItem = document.getElementById('cs-edit-item');
-  csEditItem.addEventListener('click', () => port.postMessage({type: 'cs-edit-item'}));
-
-  const bgBulkEditItems = document.getElementById('bg-bulk-edit-items');
-  bgBulkEditItems.addEventListener('click', () => port.postMessage({type: 'bg-bulk-edit-items'}));
-
-  const csBulkEditItems = document.getElementById('cs-bulk-edit-items');
-  csBulkEditItems.addEventListener('click', () => port.postMessage({type: 'cs-bulk-edit-items'}));
+  for (const id of IDS) {
+    const element = document.getElementById(id);
+    element.addEventListener('click', () => port.postMessage({type: id}));
+  }
 })();
