@@ -19,14 +19,6 @@
 
   let nextKey = 1;
   let nextValue = 1;
-  const map = new Map();
-  map.set("a", "b");
-  const set = new Set();
-  set.add(1).add("a");
-  const arrBuff = new ArrayBuffer(8);
-  const bigint = 1n;
-  const date = new Date(0);
-  const regexp = /regexp/;
 
   function handleChange(changes, areaName) {}
   browser.storage.onChanged.addListener(handleChange);
@@ -166,8 +158,36 @@
     }
     console.log(`${fromScript} removed item `, item);
   }
-  async function bulkRemoveItems(fromScript) {/* TODO */}
-  async function removeAllItems(fromScript) {/* TODO */}
+
+  async function bulkRemoveItems(fromScript) {
+    // Remove the first 10 (or first n if n < 10) items in storage local
+    const allItemsKeys = Object.keys(await browser.storage.local.get());
+    if (allItemsKeys.length === 0) {
+      console.error('There are no items in extension storage local. To remove an item, please add one or more storage items first.');
+      return;
+    }
+
+    // Take the first n keys in storage for n <= 10
+    const keysToRemove = allItemsKeys.slice(0, allItemsKeys.length > 10 ? 10 : allItemsKeys.length);
+    for (const key of keysToRemove) {
+      removeItem(fromScript, key);
+    }
+  }
+
+  async function removeAllItems(fromScript) {
+    // Remove the first 10 (or first n if n < 10) items in storage local
+    const allItemsKeys = Object.keys(await browser.storage.local.get());
+    if (allItemsKeys.length === 0) {
+      console.error('There are no items in extension storage local. To remove an item, please add one or more storage items first.');
+      return;
+    }
+    if (fromScript === 'content-script') {
+      await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-remove-all-items'}); 
+    } else {
+      await browser.storage.local.clear();
+    }
+    console.log(`${fromScript} removed all items`);
+  }
 
   // Register centralized message handlers
   browser.runtime.onConnect.addListener(handleConnect);

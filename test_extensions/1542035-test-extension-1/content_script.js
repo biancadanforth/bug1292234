@@ -10,6 +10,7 @@
     ["cs-bulk-add-items", csBulkAddItems],
     ["cs-edit-item", csEditItem],
     ["cs-remove-item", csRemoveItem],
+    ["cs-remove-all-items", csRemoveAllItems],
   ]);
 
   port.onMessage.addListener((portMessage) => {
@@ -41,5 +42,10 @@
     const {item} = message;
     await browser.storage.local.remove(Object.keys(item)[0]);
     console.log("content script removed item: ", item);
+  }
+
+  async function csRemoveAllItems(message, port) {
+    await browser.storage.local.clear();
+    console.log("content script removed all items");
   }
 }());

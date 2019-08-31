@@ -14,6 +14,10 @@
     "cs-bulk-edit-items",
     "bg-remove-item",
     "cs-remove-item",
+    "bg-bulk-remove-items",
+    "cs-bulk-remove-items",
+    "bg-remove-all-items",
+    "cs-remove-all-items",
   ];
 
   const port = browser.runtime.connect();
