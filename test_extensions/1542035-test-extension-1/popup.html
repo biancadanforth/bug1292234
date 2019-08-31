@@ -7,6 +7,7 @@
       #browser-action-app div {
         border-bottom: 1px solid black;
         cursor: pointer;
+        padding: 10px;
       }
       #browser-action-app div:hover {
         background-color: yellow;
@@ -15,10 +16,12 @@
   </head>
   <body>
     <div id="browser-action-app">
-      <div id="bg-add-item">Background page adds a new storage item</div>
+      <div id="bg-add-item">Background script adds a new storage item</div>
+      <div id="bg-bulk-add-items">Background script bulk adds several storage items</div>
       <div id="cs-add-item">Content script adds a new storage item</div>
-      <div id="bg-bulk-add-items">Background page bulk adds 10 new storage items</div>
-      <div id="cs-bulk-add-items">Content script bulk adds 10 new storage items</div>
+      <div id="cs-bulk-add-items">Content script bulk adds several storage items</div>
+      <div id="bg-edit-item">Background script edits an existing storage item</div>
+      <div id="cs-edit-item">Content script edits an existing storage item</div>
     </div>
     <script src="popup.js"></script>
   </body>

@@ -16,4 +16,10 @@
 
   const csBulkAddItems = document.getElementById('cs-bulk-add-items');
   csBulkAddItems.addEventListener('click', () => port.postMessage({type: 'cs-bulk-add-items'}));
+
+  const bgEditItem = document.getElementById('bg-edit-item');
+  bgEditItem.addEventListener('click', () => port.postMessage({type: 'bg-edit-item'}));
+
+  const csEditItem = document.getElementById('cs-edit-item');
+  csEditItem.addEventListener('click', () => port.postMessage({type: 'cs-edit-item'}));
 })();
