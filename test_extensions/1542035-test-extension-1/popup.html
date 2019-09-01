@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <title>1542035-test-extension-1</title>
+    <style>
+      #browser-action-app div {
+        border-bottom: 1px solid black;
+        cursor: pointer;
+        padding: 10px;
+      }
+      #browser-action-app div:hover {
+        background-color: yellow;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="browser-action-app">
+      <div id="bg-add-item">Background script adds a new storage item</div>
+      <div id="bg-bulk-add-items">Background script bulk adds several storage items</div>
+      <div id="cs-add-item">Content script adds a new storage item</div>
+      <div id="cs-bulk-add-items">Content script bulk adds several storage items</div>
+      <div id="bg-edit-item">Background script edits an existing storage item</div>
+      <div id="cs-edit-item">Content script edits an existing storage item</div>
+      <div id="bg-bulk-edit-items">Background script bulk edits several existing storage items</div>
+      <div id="cs-bulk-edit-items">Content script bulk edits several existing storage items</div>
+      <div id="bg-remove-item">Background script removes an existing storage item</div>
+      <div id="cs-remove-item">Content script removes an existing storage item</div>
+      <div id="bg-bulk-remove-items">Background script bulk removes several existing storage items</div>
+      <div id="cs-bulk-remove-items">Content script bulk removes several existing storage items</div>
+      <div id="bg-remove-all-items">Background script removes all existing storage items</div>
+      <div id="cs-remove-all-items">Content script removes all existing storage items</div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

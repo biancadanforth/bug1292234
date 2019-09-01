@@ -1,0 +1,34 @@
+{
+  "hidden": true,
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_title": "Bug 1542035",
+    "default_popup": "popup.html"
+  },
+  "description": "Test extension for Bug 1542035. This extension has a background page and a content script, each of which can add items to browser.storage.local.",
+  "homepage_url": "https://github.com/biancadanforth/bug_1542035/test_extensions",
+  "manifest_version": 2,
+  "name": "1542035-test-extension-1",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "js": ["content_script.js"]
+    }
+  ],
+  "version": "1.0",
+  "applications": {
+      "gecko": {
+          "id": "1542035-test-extension-1@mozilla.org",
+          "strict_min_version": "57.0a1"
+      }
+  }
+}
