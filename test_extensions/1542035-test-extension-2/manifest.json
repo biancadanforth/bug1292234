@@ -1,0 +1,22 @@
+{
+  "hidden": true,
+  "browser_action": {
+    "default_title": "Bug 1542035 Test Extension 2",
+    "default_popup": "popup.html"
+  },
+  "description": "Test extension for Bug 1542035. This extension has no background script and a browserAction toolbar button. Clicking the browserAction toolbar button opens a popup with a menu.",
+  "homepage_url": "https://github.com/biancadanforth/bug_1542035/test_extensions",
+  "manifest_version": 2,
+  "name": "1542035-test-extension-2",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "version": "1.0",
+  "applications": {
+      "gecko": {
+          "id": "1542035-test-extension-2@mozilla.org",
+          "strict_min_version": "57.0a1"
+      }
+  }
+}

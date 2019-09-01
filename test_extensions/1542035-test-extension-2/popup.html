@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <title>1542035-test-extension-2</title>
+    <style>
+      #browser-action-app div {
+        border-bottom: 1px solid black;
+        cursor: pointer;
+        padding: 10px;
+      }
+      #browser-action-app div:hover {
+        background-color: yellow;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="browser-action-app">
+      <div id="ba-add-item">browserAction script adds a new storage item</div>
+      <div id="ba-bulk-add-items">browserAction script bulk adds several storage items</div>
+      <div id="ba-edit-item">browserAction script edits an existing storage item</div>
+      <div id="ba-bulk-edit-items">browserAction script bulk edits several existing storage items</div>
+      <div id="ba-remove-item">browserAction script removes an existing storage item</div>
+      <div id="ba-bulk-remove-items">browserAction script bulk removes several existing storage items</div>
+      <div id="ba-remove-all-items">browserAction script removes all existing storage items</div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

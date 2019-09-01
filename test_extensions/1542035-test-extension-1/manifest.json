@@ -4,7 +4,7 @@
     "scripts": ["background.js"]
   },
   "browser_action": {
-    "default_title": "Bug 1542035",
+    "default_title": "Bug 1542035 Test Extension 1",
     "default_popup": "popup.html"
   },
   "description": "Test extension for Bug 1542035. This extension has a background page and a content script, each of which can add items to browser.storage.local.",
