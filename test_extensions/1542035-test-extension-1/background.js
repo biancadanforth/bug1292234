@@ -2,6 +2,11 @@
   let BROWSER_ACTION_PORT = null;
   let CONTENT_SCRIPT_PORT = null;
 
+  let {counter} = await browser.storage.sync.get();
+  if (counter === undefined) {
+    counter = 1;
+  }
+
   // The storage panel doesn't currently support "bigint", "undefined", "symbol" or "function"
   const ACCEPTABLE_TYPES = [
     "object",
@@ -16,9 +21,6 @@
     number: 42,
     string: "giraffes",
   }
-
-  let nextKey = 1;
-  let nextValue = 1;
 
   function handleChange(changes, areaName) {}
   browser.storage.onChanged.addListener(handleChange);
@@ -67,24 +69,24 @@
   }
 
   async function addItem(fromScript) {
-    const item = {[String(nextKey)]: nextValue};
+    const item = {[String(counter)]: counter};
     if (fromScript === 'content-script') {
       await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-add-item', item});
     } else {
       await browser.storage.local.set(item);
     }
     console.log(`${fromScript} added item: `, item);
-    nextKey++;
-    nextValue++;
+    counter++;
+    await browser.storage.sync.set({counter});
   }
 
   async function bulkAddItems(fromScript) {
     const items = {};
     for (let i = 1; i <= 10; i++) {
       const item = {};
-      items[nextKey] = nextValue;
-      nextKey++;
-      nextValue++;
+      items[counter] = counter;
+      counter++;
+      await browser.storage.sync.set({counter});
     }
     if (fromScript === 'content-script') {
       await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-bulk-add-items', items});

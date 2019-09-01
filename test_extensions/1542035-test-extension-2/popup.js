@@ -66,7 +66,6 @@
     }
 
     // Determine the type of its current value
-    console.log(randomKey);
     const randomItem = await browser.storage.local.get(randomKey);
     const randomValue = randomItem[randomKey];
     const type = typeof randomValue;
