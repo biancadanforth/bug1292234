@@ -35,7 +35,7 @@
   }
 
   async function addItem(evt) {
-    const item = {[String(counter)]: counter};
+    const item = {[`a${String(counter)}`]: counter};
     await browser.storage.local.set(item);
     console.log(`browserAction script added item: `, item);
     counter++;
@@ -46,7 +46,7 @@
     const items = {};
     for (let i = 1; i <= 10; i++) {
       const item = {};
-      items[counter] = counter;
+      items[`a${String(counter)}`] = counter;
       counter++;
       await browser.storage.sync.set({counter});
     }

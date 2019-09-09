@@ -69,7 +69,7 @@
   }
 
   async function addItem(fromScript) {
-    const item = {[String(counter)]: counter};
+    const item = {[`a${String(counter)}`]: counter};
     if (fromScript === 'content-script') {
       await CONTENT_SCRIPT_PORT.postMessage({type: 'cs-add-item', item});
     } else {
@@ -84,7 +84,7 @@
     const items = {};
     for (let i = 1; i <= 10; i++) {
       const item = {};
-      items[counter] = counter;
+      items[`a${String(counter)}`] = counter;
       counter++;
       await browser.storage.sync.set({counter});
     }

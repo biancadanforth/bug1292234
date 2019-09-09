@@ -1,6 +1,6 @@
 {
   "name": "1542035-test-extension-2",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Test extension for Bug 1542035. This extension has no background script and a browserAction toolbar button. Clicking the browserAction toolbar button opens a popup with a menu.",
   "main": "popup.js",
   "scripts": {
