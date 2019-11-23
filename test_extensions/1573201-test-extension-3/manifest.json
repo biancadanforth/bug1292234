@@ -1,0 +1,25 @@
+{
+  "hidden": true,
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_title": "Bug 1573201 Test Extension 3",
+    "default_popup": "popup.html"
+  },
+  "description": "Test extension for Bug 1573201. An extension with a background script that automatically adds several `storage.local` storage items on startup and subscribes to `browser.storage.onChanged` events and logs change data to the Addon toolbox Console panel.",
+  "homepage_url": "https://github.com/biancadanforth/bug_1542035/test_extensions",
+  "manifest_version": 2,
+  "name": "1573201-test-extension-3",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "version": "1.0",
+  "applications": {
+      "gecko": {
+          "id": "1573201-test-extension-3@mozilla.org",
+          "strict_min_version": "57.0a1"
+      }
+  }
+}
